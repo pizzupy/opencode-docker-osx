@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Label must be unique -->
+    <key>Label</key>
+    <string>com.opencode.rebuild</string>
+    
+    <!-- Path to the script -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>SCRIPT_DIR_PLACEHOLDER/rebuild-opencode-cron.sh</string>
+    </array>
+    
+    <!-- Run every day at 3 AM -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>3</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+    
+    <!-- Standard output and error logs -->
+    <key>StandardOutPath</key>
+    <string>/tmp/opencode-launchd.out.log</string>
+    
+    <key>StandardErrorPath</key>
+    <string>/tmp/opencode-launchd.err.log</string>
+    
+    <!-- Run even if the previous instance is still running -->
+    <key>RunAtLoad</key>
+    <false/>
+    
+    <!-- Environment variables (important for Docker) -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin</string>
+    </dict>
+    
+    <!-- Working directory -->
+    <key>WorkingDirectory</key>
+    <string>SCRIPT_DIR_PLACEHOLDER</string>
+</dict>
+</plist>
