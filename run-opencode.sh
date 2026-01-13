@@ -15,6 +15,26 @@ PROXY_PORT="${PROXY_PORT:-8080}"
 # Optional features (set to "true" to enable)
 ENABLE_GIT_CREDENTIAL_PROXY="${ENABLE_GIT_CREDENTIAL_PROXY:-false}"
 
+# Function to check if a port is available
+is_port_available() {
+    local port=$1
+    ! lsof -Pi :$port -sTCP:LISTEN -t >/dev/null 2>&1
+}
+
+# Function to find an available port starting from a given port
+find_available_port() {
+    local start_port=$1
+    local port=$start_port
+    while [ $port -lt $((start_port + 100)) ]; do
+        if is_port_available $port; then
+            echo $port
+            return 0
+        fi
+        port=$((port + 1))
+    done
+    return 1
+}
+
 # Persistent storage for container Python virtual environments (XDG cache)
 VENV_CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/opencode/docker-venvs"
 mkdir -p "$VENV_CACHE_DIR/poetry" "$VENV_CACHE_DIR/uv"
@@ -62,15 +82,41 @@ echo ""
 
 # Step 1: Check/start mcp-proxy on host (Handles MCP OAuth callbacks)
 echo "Checking mcp-proxy service..."
-if ! "$SCRIPT_DIR/manage-mcp-proxy.sh" status >/dev/null 2>&1; then
-    echo -e "${YELLOW}Starting mcp-proxy on Mac host...${NC}"
-    if ! "$SCRIPT_DIR/manage-mcp-proxy.sh" start; then
-        echo -e "${RED}✗ Failed to start mcp-proxy${NC}"
-        echo "  Try manually: $SCRIPT_DIR/manage-mcp-proxy.sh start"
-        exit 1
-    fi
+
+# First check if mcp-proxy is already running
+if "$SCRIPT_DIR/manage-mcp-proxy.sh" status >/dev/null 2>&1; then
+    echo -e "${GREEN}✓ mcp-proxy is running on port $PROXY_PORT${NC}"
 else
-    echo -e "${GREEN}✓ mcp-proxy is running${NC}"
+    # Check if the requested port is available
+    if ! is_port_available $PROXY_PORT; then
+        # Check if it's mcp-proxy using the port
+        if lsof -Pi :$PROXY_PORT -sTCP:LISTEN -t >/dev/null 2>&1; then
+            PORT_PID=$(lsof -Pi :$PROXY_PORT -sTCP:LISTEN -t 2>/dev/null | head -1)
+            if ps -p "$PORT_PID" -o command= 2>/dev/null | grep -q "mcp-proxy"; then
+                echo -e "${GREEN}✓ mcp-proxy already running on port $PROXY_PORT${NC}"
+            else
+                echo -e "${YELLOW}⚠ Port $PROXY_PORT is in use by another process (PID $PORT_PID)${NC}"
+                echo "  Finding alternative port..."
+                PROXY_PORT=$(find_available_port $((PROXY_PORT + 1)))
+                if [ -z "$PROXY_PORT" ]; then
+                    echo -e "${RED}✗ Could not find an available port${NC}"
+                    exit 1
+                fi
+                echo -e "${GREEN}  Using port $PROXY_PORT instead${NC}"
+                export PROXY_PORT
+            fi
+        fi
+    fi
+    
+    # Try to start mcp-proxy if not running
+    if ! "$SCRIPT_DIR/manage-mcp-proxy.sh" status >/dev/null 2>&1; then
+        echo -e "${YELLOW}Starting mcp-proxy on Mac host (port $PROXY_PORT)...${NC}"
+        if ! "$SCRIPT_DIR/manage-mcp-proxy.sh" start; then
+            echo -e "${RED}✗ Failed to start mcp-proxy${NC}"
+            echo "  Try manually: PROXY_PORT=$PROXY_PORT $SCRIPT_DIR/manage-mcp-proxy.sh start"
+            exit 1
+        fi
+    fi
 fi
 echo ""
 
