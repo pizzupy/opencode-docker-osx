@@ -85,7 +85,21 @@ echo "Checking mcp-proxy service..."
 
 # First check if mcp-proxy is already running
 if "$SCRIPT_DIR/manage-mcp-proxy.sh" status >/dev/null 2>&1; then
-    echo -e "${GREEN}✓ mcp-proxy is running on port $PROXY_PORT${NC}"
+    # Detect actual port from running process
+    PID_FILE="$HOME/.cache/mcp-proxy.pid"
+    if [ -f "$PID_FILE" ]; then
+        RUNNING_PID=$(cat "$PID_FILE")
+        ACTUAL_PORT=$(ps -p "$RUNNING_PID" -o args= 2>/dev/null | grep -o '\--port [0-9]*' | awk '{print $2}')
+        if [ -n "$ACTUAL_PORT" ]; then
+            PROXY_PORT=$ACTUAL_PORT
+            export PROXY_PORT
+            echo -e "${GREEN}✓ mcp-proxy is running on port $PROXY_PORT${NC}"
+        else
+            echo -e "${GREEN}✓ mcp-proxy is running on port $PROXY_PORT (assumed)${NC}"
+        fi
+    else
+        echo -e "${GREEN}✓ mcp-proxy is running on port $PROXY_PORT (assumed)${NC}"
+    fi
 else
     # Check if the requested port is available
     if ! is_port_available $PROXY_PORT; then

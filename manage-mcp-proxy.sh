@@ -113,15 +113,23 @@ status_proxy() {
     if is_running; then
         local pid=$(cat "$PID_FILE")
         echo "✓ mcp-proxy is running (PID $pid)"
-        echo "  Port: $PROXY_PORT"
-        echo "  Logs: $LOG_FILE"
         
-        # Check if port is actually listening
-        if lsof -Pi :$PROXY_PORT -sTCP:LISTEN -t >/dev/null 2>&1; then
-            echo "  Status: Listening on port $PROXY_PORT"
+        # Detect actual port from process command line
+        local actual_port=$(ps -p "$pid" -o args= 2>/dev/null | grep -o '\--port [0-9]*' | awk '{print $2}')
+        if [ -n "$actual_port" ]; then
+            echo "  Port: $actual_port"
+            # Check if port is actually listening
+            if lsof -Pi :$actual_port -sTCP:LISTEN -t >/dev/null 2>&1; then
+                echo "  Status: Listening on port $actual_port"
+            else
+                echo "  Warning: Process running but not listening on port $actual_port"
+            fi
         else
-            echo "  Warning: Process running but not listening on port $PROXY_PORT"
+            echo "  Port: $PROXY_PORT (default)"
+            echo "  Warning: Could not detect actual port from process"
         fi
+        
+        echo "  Logs: $LOG_FILE"
         return 0
     else
         echo "✗ mcp-proxy is not running"
