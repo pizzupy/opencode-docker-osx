@@ -15,6 +15,8 @@ make build
 ./run-opencode.sh
 ```
 
+**Note:** This project uses a **layered Docker build** (base system + OpenCode layer). The base layer (~2.5GB) is built once and rarely updated. The OpenCode layer (~100MB) can be updated frequently. This means OpenCode updates are **10-20x faster** than rebuilding everything. See build scripts: `./build-base.sh`, `./build-opencode.sh`, `./build-all.sh`.
+
 ## Daily usage
 
 ``` bash

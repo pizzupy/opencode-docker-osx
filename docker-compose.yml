@@ -6,6 +6,10 @@ services:
     container_name: opencode-dev
     
     # Build configuration
+    # Note: This uses a layered build approach:
+    #   - Base layer (opencode-base): Ubuntu + tools (built separately, updates rarely)
+    #   - OpenCode layer (opencode-dev): OpenCode + integrations (built frequently)
+    # To build: ./build-all.sh (first time) or ./build-opencode.sh (updates)
     build:
       context: .
       dockerfile: Dockerfile
