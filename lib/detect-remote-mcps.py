@@ -189,6 +189,70 @@ def generate_mcp_proxy_config(remote_mcps: Dict[str, str]) -> Dict:
     
     return {"mcpServers": servers}
 
+def translate_localhost_urls(config: Dict, use_docker: bool = True) -> Tuple[Dict, int]:
+    """
+    Translate localhost/127.0.0.1 URLs to host.docker.internal for Docker.
+    
+    Returns tuple of (updated_config, count_of_translations)
+    """
+    if not use_docker:
+        return config, 0
+    
+    # Try both 'mcp' and 'mcpServers' keys
+    mcp_key = 'mcp' if 'mcp' in config else 'mcpServers'
+    mcp_servers = config.get(mcp_key, {})
+    
+    translations = 0
+    
+    for name, server_config in mcp_servers.items():
+        if not isinstance(server_config, dict):
+            continue
+        
+        # Check if this is a remote type with a URL
+        if server_config.get('type') == 'remote' and 'url' in server_config:
+            url = server_config['url']
+            
+            # Replace localhost and 127.0.0.1 with host.docker.internal
+            updated_url = url
+            updated_url = re.sub(r'://localhost\b', '://host.docker.internal', updated_url)
+            updated_url = re.sub(r'://127\.0\.0\.1\b', '://host.docker.internal', updated_url)
+            
+            if updated_url != url:
+                server_config['url'] = updated_url
+                translations += 1
+                print(f"  Translated {name}: {url} -> {updated_url}")
+        
+        # Also check in command/args for URLs (e.g., in environment variables)
+        # This handles cases where URL is passed as an argument
+        for key in ['command', 'args', 'env']:
+            if key in server_config:
+                value = server_config[key]
+                if isinstance(value, str):
+                    updated = value.replace('localhost', 'host.docker.internal')
+                    updated = updated.replace('127.0.0.1', 'host.docker.internal')
+                    if updated != value:
+                        server_config[key] = updated
+                        translations += 1
+                elif isinstance(value, list):
+                    for i, item in enumerate(value):
+                        if isinstance(item, str):
+                            updated = item.replace('localhost', 'host.docker.internal')
+                            updated = updated.replace('127.0.0.1', 'host.docker.internal')
+                            if updated != item:
+                                value[i] = updated
+                                translations += 1
+                elif isinstance(value, dict):
+                    for k, v in value.items():
+                        if isinstance(v, str):
+                            updated = v.replace('localhost', 'host.docker.internal')
+                            updated = updated.replace('127.0.0.1', 'host.docker.internal')
+                            if updated != v:
+                                value[k] = updated
+                                translations += 1
+    
+    config[mcp_key] = mcp_servers
+    return config, translations
+
 def update_opencode_config(config: Dict, remote_mcps: Dict[str, str], proxy_port: int = 8080, use_docker: bool = True) -> Dict:
     """
     Update the opencode config to use mcp-proxy endpoints instead of direct remote connections.
@@ -215,6 +279,16 @@ def update_opencode_config(config: Dict, remote_mcps: Dict[str, str], proxy_port
             }
     
     config[mcp_key] = mcp_servers
+    
+    # Also translate any other localhost references
+    if use_docker:
+        print("\nTranslating localhost/127.0.0.1 URLs for Docker...")
+        config, count = translate_localhost_urls(config, use_docker)
+        if count > 0:
+            print(f"✓ Translated {count} localhost reference(s)")
+        else:
+            print("  No additional localhost references found")
+    
     return config
 
 def write_jsonc(file_path: str, config: Dict):
@@ -324,7 +398,7 @@ def main():
                         shutil.rmtree(dst)
                     shutil.copytree(src, dst)
     
-    # Update config for Docker
+    # Update config for Docker (this also translates localhost URLs)
     updated_config = update_opencode_config(config, remote_mcps, args.port, args.docker)
     
     if args.dry_run:

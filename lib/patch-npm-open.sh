@@ -73,8 +73,10 @@ patch_open_packages
 # Monitor for new npx installations and patch them
 # This runs in the background
 if [ "${PATCH_NPM_OPEN_WATCH:-}" = "1" ]; then
+    # Don't background - let this script become the monitoring loop
+    # This prevents zombie processes
     while true; do
         sleep 2
         patch_open_packages
-    done &
+    done
 fi

@@ -53,9 +53,11 @@ RUN chmod +x /usr/local/bin/xsel-wrapper && \
     ln -sf /usr/local/bin/xsel-wrapper /usr/bin/xsel && \
     echo "Clipboard bridge wrapper installed (xsel)"
 
-# Install OpenCode entrypoint (TTY-preserving with exec)
+# Install OpenCode entrypoint and process monitor
 COPY lib/opencode-entrypoint-tty.sh /usr/local/bin/opencode-entrypoint-tty
-RUN chmod +x /usr/local/bin/opencode-entrypoint-tty
+COPY lib/monitor-processes.sh /usr/local/bin/monitor-processes.sh
+RUN chmod +x /usr/local/bin/opencode-entrypoint-tty && \
+    chmod +x /usr/local/bin/monitor-processes.sh
 
 # Install git credential helper for macOS Keychain proxy
 COPY lib/git-credential-helper /usr/local/bin/git-credential-helper

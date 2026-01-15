@@ -344,7 +344,12 @@ DOCKER_ARGS=(
     # -v "$VENV_CACHE_DIR/uv:/root/.cache/uv/venvs"
 )
 
-# Set fake DISPLAY for clipboard tools (xsel requires it)
+# Generate unique container ID from container name (to avoid conflicts when sharing /tmp)
+# Extract numeric suffix from container name (e.g., "opencode-myproject-12345" -> "12345")
+CONTAINER_ID=$(echo "$CONTAINER_NAME" | grep -o '[0-9]*$' || echo "$$")
+DOCKER_ARGS+=(-e "CONTAINER_ID=$CONTAINER_ID")
+
+# Set fake DISPLAY for clipboard tools (will be overridden by entrypoint to unique value)
 DOCKER_ARGS+=(-e "DISPLAY=:99")
 
 # Pass through TERM for proper terminal features (clipboard, colors, etc.)
