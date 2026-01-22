@@ -188,6 +188,11 @@ make fish          # Interactive fish
 Control optional features and behavior:
 
 ```bash
+# Pass environment variables to container
+DOCKER_ENV="AWS_PROFILE,DEBUG=1" ./run-opencode.sh        # Comma-separated
+DOCKER_ENV="AWS_PROFILE DEBUG=1" ./run-opencode.sh        # Space-separated
+DOCKER_ENV="API_KEY,NODE_ENV=production" ./run-opencode.sh
+
 # Enable git credential proxy for macOS Keychain access
 ENABLE_GIT_CREDENTIAL_PROXY=true ./run-opencode.sh
 
@@ -382,6 +387,9 @@ Uses `localhost` instead of `host.docker.internal`.
 
 ### Environment Variables
 ```bash
+# Pass custom environment variables to container
+DOCKER_ENV="AWS_PROFILE,DEBUG=1" ./run-opencode.sh
+
 # Custom proxy port
 PROXY_PORT=8081 ./run-opencode.sh
 

@@ -5,6 +5,18 @@
 # 2. Starts the URL bridge for browser opening
 # 3. Runs OpenCode in Docker with proper configuration
 #
+# Usage:
+#   ./run-opencode.sh [opencode arguments]
+#   ./run-opencode.sh enter
+#
+# Environment Variables:
+#   DOCKER_ENV    Comma/space-separated list of env vars to pass through
+#                 Examples: "AWS_PROFILE,DEBUG=1" or "VAR1 VAR2=value"
+#
+# Examples:
+#   DOCKER_ENV="AWS_PROFILE,DEBUG=1" ./run-opencode.sh
+#   ./run-opencode.sh enter
+#
 
 set -euo pipefail
 
@@ -14,6 +26,20 @@ PROXY_PORT="${PROXY_PORT:-8080}"
 
 # Optional features (set to "true" to enable)
 ENABLE_GIT_CREDENTIAL_PROXY="${ENABLE_GIT_CREDENTIAL_PROXY:-false}"
+
+# Parse DOCKER_ENV for environment variables to pass through
+# Format: "VAR1,VAR2,VAR3=value" or "VAR1 VAR2 VAR3=value"
+declare -a PASSTHROUGH_ENV_VARS=()
+if [ -n "${DOCKER_ENV:-}" ]; then
+    # Split on both comma and space
+    IFS=', ' read -ra ENV_ITEMS <<< "$DOCKER_ENV"
+    for item in "${ENV_ITEMS[@]}"; do
+        item=$(echo "$item" | xargs)  # trim whitespace
+        if [ -n "$item" ]; then
+            PASSTHROUGH_ENV_VARS+=("$item")
+        fi
+    done
+fi
 
 # Function to check if a port is available
 is_port_available() {
@@ -364,6 +390,27 @@ if [ -n "${GH_TOKEN:-}" ]; then
 fi
 if [ -n "${GITHUB_TOKEN:-}" ]; then
     DOCKER_ARGS+=(-e "GITHUB_TOKEN=$GITHUB_TOKEN")
+fi
+
+# Pass through user-specified environment variables (-e flags)
+if [ ${#PASSTHROUGH_ENV_VARS[@]} -gt 0 ]; then
+    echo -e "  Custom env vars:"
+    for env_var in "${PASSTHROUGH_ENV_VARS[@]}"; do
+        if [[ "$env_var" == *"="* ]]; then
+            # Explicit value provided: -e VAR=value
+            var_name="${env_var%%=*}"
+            DOCKER_ARGS+=(-e "$env_var")
+            echo -e "    ${GREEN}$var_name${NC} (explicit value)"
+        else
+            # No value provided: -e VAR (get from current environment)
+            if [ -n "${!env_var:-}" ]; then
+                DOCKER_ARGS+=(-e "$env_var=${!env_var}")
+                echo -e "    ${GREEN}$env_var${NC} (from host)"
+            else
+                echo -e "    ${YELLOW}$env_var${NC} (not set, skipped)"
+            fi
+        fi
+    done
 fi
 
 # Mount SSH agent socket for git operations
