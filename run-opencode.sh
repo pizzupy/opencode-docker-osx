@@ -414,7 +414,17 @@ if [ ${#PASSTHROUGH_ENV_VARS[@]} -gt 0 ]; then
 fi
 
 # Mount SSH agent socket for git operations
-if [ -n "${SSH_AUTH_SOCK:-}" ] && [ -S "$SSH_AUTH_SOCK" ]; then
+# On macOS with Docker Desktop, use the special /run/host-services path
+# which is more reliable than mounting the launchd socket directly
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    # macOS with Docker Desktop - use the built-in SSH agent forwarding
+    DOCKER_ARGS+=(
+        -v "/run/host-services/ssh-auth.sock:/ssh-agent"
+        -e "SSH_AUTH_SOCK=/ssh-agent"
+    )
+    echo -e "  SSH agent: ${GREEN}forwarded (Docker Desktop)${NC}"
+elif [ -n "${SSH_AUTH_SOCK:-}" ] && [ -S "$SSH_AUTH_SOCK" ]; then
+    # Linux - mount the host socket directly
     DOCKER_ARGS+=(
         -v "$SSH_AUTH_SOCK:/ssh-agent"
         -e "SSH_AUTH_SOCK=/ssh-agent"

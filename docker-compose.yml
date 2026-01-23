@@ -35,7 +35,8 @@ services:
       - ${HOME}/.ssh:/root/.ssh:ro
       
       # Mount SSH agent socket for agent forwarding
-      - ${SSH_AUTH_SOCK}:/ssh-agent
+      # On macOS with Docker Desktop, use the special /run/host-services path
+      - /run/host-services/ssh-auth.sock:/ssh-agent
       
       # Optional: Mount git credential proxy socket for macOS Keychain access
       # Uncomment to enable (requires starting proxy: python3 lib/git-credential-proxy.py)
