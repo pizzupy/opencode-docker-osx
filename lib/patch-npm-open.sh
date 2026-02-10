@@ -1,6 +1,7 @@
 #!/bin/bash
-# Patch Node's 'open' package to use our bridge
-# This runs at container startup to patch any npx-installed packages
+# Patch ALL xdg-open binaries in npm cache to use our bridge
+# This runs at container startup and monitors for new npx-installed packages
+# Catches: open package, playwright, and any other bundled xdg-open binaries
 
 set -e
 
@@ -57,9 +58,11 @@ chmod +x /usr/local/bin/xdg-open-bridge
 
 # Function to patch open packages
 patch_open_packages() {
-    # Find all open package installations in npm cache
-    find /root/.npm -name "xdg-open" -path "*/node_modules/open/xdg-open" 2>/dev/null | while read xdg_open; do
+    # Find ALL xdg-open binaries in npm cache (not just the 'open' package)
+    # This catches bundled xdg-open in playwright, open, and any other packages
+    find /root/.npm -name "xdg-open" -type f 2>/dev/null | while read xdg_open; do
         if [ -f "$xdg_open" ] && [ ! -f "${xdg_open}.original" ]; then
+            echo "Patching: $xdg_open" >> /tmp/patch-npm-open.log 2>&1 || true
             mv "$xdg_open" "${xdg_open}.original"
             cp /usr/local/bin/xdg-open-bridge "$xdg_open"
             chmod +x "$xdg_open"

@@ -7,7 +7,8 @@
 #
 # Usage:
 #   ./run-opencode.sh [opencode arguments]
-#   ./run-opencode.sh enter
+#   ./run-opencode.sh enter              # Enter a running container (with fzf selection)
+#   ./run-opencode.sh logs [options]     # View container logs (e.g., logs -f --tail 100)
 #
 # Environment Variables:
 #   DOCKER_ENV    Comma/space-separated list of env vars to pass through
@@ -16,9 +17,26 @@
 # Examples:
 #   DOCKER_ENV="AWS_PROFILE,DEBUG=1" ./run-opencode.sh
 #   ./run-opencode.sh enter
+#   ./run-opencode.sh logs -f --tail 50
 #
 
 set -euo pipefail
+
+# Check if we're running inside a Docker container
+if [ -f /.dockerenv ] || grep -q docker /proc/1/cgroup 2>/dev/null; then
+    echo "ERROR: This script must be run from the HOST, not from inside a container."
+    echo ""
+    echo "If you're inside an OpenCode container, exit first and run this script from your Mac terminal."
+    echo ""
+    echo "To exit the container, press Ctrl+D or type 'exit'"
+    exit 1
+fi
+
+# Check if docker command is available
+if ! command -v docker >/dev/null 2>&1; then
+    echo "ERROR: docker command not found. Please install Docker Desktop."
+    exit 1
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 IMAGE="${IMAGE:-opencode-dev:latest}"
@@ -86,21 +104,121 @@ EXTRA_MOUNTS="${EXTRA_MOUNTS:-}"
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
+BLUE='\033[0;34m'
 NC='\033[0m' # No Color
+
+# Show usage information
+show_usage() {
+    echo "OpenCode Docker - Run OpenCode in isolated containers"
+    echo ""
+    echo "Usage:"
+    echo "  $0                        Start OpenCode in a new container"
+    echo "  $0 enter                  Enter a running container (interactive selection)"
+    echo "  $0 logs [options]         View container logs (e.g., -f --tail 100)"
+    echo "  $0 ps                     List running containers"
+    echo "  $0 stop                   Stop a running container (interactive selection)"
+    echo "  $0 help                   Show this help message"
+    echo ""
+    echo "Environment Variables:"
+    echo "  DOCKER_ENV               Comma/space-separated env vars to pass through"
+    echo "  PROXY_PORT               MCP proxy port (default: 8080)"
+    echo ""
+    echo "Examples:"
+    echo "  $0                                    # Start OpenCode"
+    echo "  $0 enter                              # Enter a container"
+    echo "  $0 logs -f --tail 50                  # Follow logs with last 50 lines"
+    echo "  $0 stop                               # Stop a container"
+    echo "  DOCKER_ENV='AWS_PROFILE' $0           # Pass AWS_PROFILE to container"
+    exit 0
+}
+
+# Show help
+if [ "${1:-}" = "help" ] || [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+    show_usage
+fi
+
+# Handle "ps" command to list running containers
+if [ "${1:-}" = "ps" ] || [ "${1:-}" = "list" ]; then
+    containers=$(docker ps --filter "name=^opencode-" --format "table {{.Names}}\t{{.Status}}\t{{.RunningFor}}\t{{.Size}}" 2>/dev/null)
+    
+    if [ -z "$containers" ] || [ "$(echo "$containers" | wc -l)" -eq 1 ]; then
+        echo -e "${YELLOW}No running opencode containers found${NC}"
+        exit 0
+    fi
+    
+    echo -e "${GREEN}Running OpenCode containers:${NC}"
+    echo "$containers"
+    exit 0
+fi
+
+# Function to list all running opencode containers with fzf
+list_and_select_container() {
+    local containers
+    containers=$(docker ps --filter "name=^opencode-" --format "{{.Names}}\t{{.Status}}\t{{.RunningFor}}" 2>/dev/null)
+    
+    if [ -z "$containers" ]; then
+        echo -e "${RED}Error: No running opencode containers found${NC}"
+        echo "Run './run-opencode.sh' first to start a container"
+        exit 1
+    fi
+    
+    local container_count
+    container_count=$(echo "$containers" | wc -l | xargs)
+    
+    if [ "$container_count" -eq 1 ]; then
+        # Only one container, use it directly
+        echo "$containers" | awk '{print $1}'
+    else
+        # Multiple containers, use fzf if available
+        if command -v fzf >/dev/null 2>&1; then
+            echo "$containers" | fzf --height=~10 --header="Select container to enter:" | awk '{print $1}'
+        else
+            echo -e "${YELLOW}Multiple containers found. fzf not installed, showing list:${NC}"
+            echo "$containers" | nl
+            echo -n "Enter number: "
+            read -r selection
+            echo "$containers" | sed -n "${selection}p" | awk '{print $1}'
+        fi
+    fi
+}
 
 # Handle "enter" command to exec into existing container
 if [ "${1:-}" = "enter" ]; then
-    CONTAINER_NAME=$(find_running_container)
+    CONTAINER_NAME=$(list_and_select_container)
     if [ -n "$CONTAINER_NAME" ]; then
         echo -e "${GREEN}Entering container: $CONTAINER_NAME${NC}"
         exec docker exec -it "$CONTAINER_NAME" bash
     else
-        FOLDER_NAME=$(basename "$PWD" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/^-*//' | sed 's/-*$//')
-        echo -e "${RED}Error: No running container found for this project${NC}"
-        echo "Expected container pattern: opencode-$FOLDER_NAME-*"
-        echo "Run './run-opencode.sh' first to start the container"
+        echo -e "${RED}No container selected${NC}"
         exit 1
     fi
+fi
+
+# Handle "logs" command to view container logs
+if [ "${1:-}" = "logs" ]; then
+    CONTAINER_NAME=$(list_and_select_container)
+    if [ -n "$CONTAINER_NAME" ]; then
+        echo -e "${GREEN}Showing logs for: $CONTAINER_NAME${NC}"
+        shift  # Remove 'logs' argument
+        exec docker logs "$@" "$CONTAINER_NAME"
+    else
+        echo -e "${RED}No container selected${NC}"
+        exit 1
+    fi
+fi
+
+# Handle "stop" command to stop a running container
+if [ "${1:-}" = "stop" ]; then
+    CONTAINER_NAME=$(list_and_select_container)
+    if [ -n "$CONTAINER_NAME" ]; then
+        echo -e "${YELLOW}Stopping container: $CONTAINER_NAME${NC}"
+        docker stop "$CONTAINER_NAME"
+        echo -e "${GREEN}Container stopped${NC}"
+    else
+        echo -e "${RED}No container selected${NC}"
+        exit 1
+    fi
+    exit 0
 fi
 
 echo -e "${GREEN}=== OpenCode Docker with OAuth Support ===${NC}"
@@ -294,6 +412,32 @@ echo "Generating Docker-specific config..."
 TEMP_CONFIG_DIR=$(mktemp -d -t opencode-config-XXXXXX)
 TEMP_CONFIG_FILE="$TEMP_CONFIG_DIR/opencode.jsonc"
 
+# Function to validate JSON/JSONC file
+validate_jsonc() {
+    local file="$1"
+    # Try to parse with Python (strips comments and validates)
+    python3 -c "
+import json
+import re
+import sys
+
+try:
+    with open('$file', 'r') as f:
+        content = f.read()
+    # Strip comments (simple approach for JSONC)
+    # Only strip // comments that are preceded by whitespace or start of line
+    content = re.sub(r'(?:^|(?<=\s))//.*', '', content, flags=re.MULTILINE)
+    content = re.sub(r'/\*.*?\*/', '', content, flags=re.DOTALL)
+    # Remove trailing commas before closing braces/brackets
+    content = re.sub(r',(\s*[}\]])', r'\1', content)
+    json.loads(content)
+    sys.exit(0)
+except Exception as e:
+    print(f'Invalid JSON/JSONC: {e}', file=sys.stderr)
+    sys.exit(1)
+" 2>&1
+}
+
 # Copy the entire config directory structure (agents, skills, commands, etc.)
 if [ -d "$HOME/.config/opencode" ]; then
     # Copy everything except opencode.jsonc (we'll generate that)
@@ -302,17 +446,44 @@ if [ -d "$HOME/.config/opencode" ]; then
     
     # Translate the config to use mcp-proxy on host
     if [ -f "$HOME/.config/opencode/opencode.jsonc" ]; then
-        python3 "$SCRIPT_DIR/lib/detect-remote-mcps.py" \
+        # Validate the config file first
+        if ! validate_jsonc "$HOME/.config/opencode/opencode.jsonc"; then
+            echo -e "${RED}✗ Error: opencode.jsonc is invalid!${NC}"
+            echo -e "${RED}  File: $HOME/.config/opencode/opencode.jsonc${NC}"
+            echo ""
+            echo "Please fix the JSON syntax errors before starting OpenCode."
+            echo "Common issues:"
+            echo "  - Missing or extra commas"
+            echo "  - Unclosed brackets or braces"
+            echo "  - Invalid escape sequences"
+            echo ""
+            rm -rf "$TEMP_CONFIG_DIR"
+            exit 1
+        fi
+        
+        # Config is valid, proceed with translation
+        TRANSLATION_ERROR=""
+        if ! python3 "$SCRIPT_DIR/lib/detect-remote-mcps.py" \
             --config "$HOME/.config/opencode/opencode.jsonc" \
             --output "$HOME/.cache/mcp-proxy-config.json" \
             --docker-config "$TEMP_CONFIG_FILE" \
             --port "$PROXY_PORT" \
             --docker \
-            > /dev/null 2>&1 || {
-                echo -e "${YELLOW}⚠ Config translation failed, using original config${NC}"
-                cp "$HOME/.config/opencode/opencode.jsonc" "$TEMP_CONFIG_FILE"
-            }
-        echo -e "${GREEN}✓ Config translated for Docker (with agents/skills)${NC}"
+            2>&1 | tee /tmp/config-translation-error.log; then
+            TRANSLATION_ERROR=$(cat /tmp/config-translation-error.log)
+        fi
+        
+        if [ -n "$TRANSLATION_ERROR" ] || [ ! -f "$TEMP_CONFIG_FILE" ]; then
+            echo -e "${RED}✗ Config translation failed!${NC}"
+            echo -e "${RED}Error:${NC}"
+            echo "$TRANSLATION_ERROR" | head -10
+            echo ""
+            echo "Cannot start OpenCode with broken config translation."
+            rm -rf "$TEMP_CONFIG_DIR"
+            exit 1
+        fi
+        
+        echo -e "${GREEN}✓ Config validated and translated for Docker${NC}"
     else
         echo -e "${YELLOW}⚠ No opencode.jsonc found, using directory structure only${NC}"
         echo '{}' > "$TEMP_CONFIG_FILE"
@@ -361,7 +532,7 @@ DOCKER_ARGS=(
     -v "$HOME/.local/share/opencode:/root/.local/share/opencode"
     -v "$HOME/.cache/opencode-docker/:/root/.cache"
     # -v "$HOME/.gitconfig:/root/.gitconfig"
-    -v "$TEMP_CONFIG_DIR:/root/.config/opencode:ro"
+    -v "$TEMP_CONFIG_DIR:/root/.config/opencode"
     -v "$PWD:$PWD"
     -w "${PWD:-/root}"
     --name "$CONTAINER_NAME"

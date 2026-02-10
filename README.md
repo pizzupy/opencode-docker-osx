@@ -1,6 +1,6 @@
 # OpenCode Docker with good ergonomy for OSX hosts
 
-Docker environment for OpenCode with automatic OAuth support, Ctrl-V for image pasting, host configurations reuse and other ergonomics. This is not meant to produce an image that is hosted publically, it's meant to generate a local image based on your needs, to provide reasonable isolation from the LLM. It's not meant to be hardened against a targeted attack or anything like that, and instead, is meant to provide some isolation so that you don't feel the need to look over the LLM shoulder all the time. The Opencode project already provides a simple Docker image. This one is meant to be ergonomic for daily use and easy to update/customize.
+Docker environment for OpenCode with automatic OAuth support, Ctrl-V for image pasting, host configurations reuse and other ergonomics. This is not meant to produce an image that is hosted publically, it's meant to generate a local image based on your needs, to provide reasonable isolation from the LLM. It's not meant to be hardened against a targeted attack or anything like that, and instead, is meant to provide some isolation so that you don't feel the need to look over the LLM shoulder all the time. The Opencode project already provides a simple Docker image. This one is meant to be ergonomic for daily use and easy to update/customize. Does not use Opencode's client/server functionality; TUI is also inside Docker. Vibe-coded, messy, but scratches the itch.
 
 ## Quick Start
 
