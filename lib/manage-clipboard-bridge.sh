@@ -8,6 +8,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLIPBOARD_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/opencode/clipboard-bridge"
+CLIPBOARD_OUT_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/opencode/clipboard-out"
 PID_FILE="$CLIPBOARD_DIR/clipboard-sync.pid"
 
 # Colors
@@ -39,9 +40,9 @@ cmd_start() {
         return 0
     fi
     
-    mkdir -p "$CLIPBOARD_DIR"
+    mkdir -p "$CLIPBOARD_DIR" "$CLIPBOARD_OUT_DIR"
     echo "Starting clipboard bridge..."
-    "$SCRIPT_DIR/clipboard-sync.sh" "$CLIPBOARD_DIR" > /dev/null 2>&1 &
+    "$SCRIPT_DIR/clipboard-sync.sh" "$CLIPBOARD_DIR" "$CLIPBOARD_OUT_DIR" > /dev/null 2>&1 &
     
     # Wait for it to start
     for i in {1..10}; do

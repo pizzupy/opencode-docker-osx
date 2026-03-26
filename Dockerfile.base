@@ -50,7 +50,7 @@ RUN apt-get update && apt-get install -y \
     pkg-config \
     libssl-dev \
     # DB
-    postgresql-client
+    postgresql-client \
     # X11 for clipboard support
     xvfb \
     x11-utils \

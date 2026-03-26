@@ -303,6 +303,19 @@ else
     echo -e "${YELLOW}⚠ Clipboard bridge not ready (Ctrl+V paste may not work)${NC}"
     # Don't fail - clipboard is optional
 fi
+
+# Watchdog: restart clipboard bridge if it dies mid-session
+WATCHDOG_PID=""
+(
+    while kill -0 $$ 2>/dev/null; do
+        sleep 10
+        if ! "$SCRIPT_DIR/lib/manage-clipboard-bridge.sh" status >/dev/null 2>&1; then
+            echo -e "${YELLOW}[watchdog] Clipboard bridge died, restarting...${NC}" >&2
+            "$SCRIPT_DIR/lib/manage-clipboard-bridge.sh" start >/dev/null 2>&1 || true
+        fi
+    done
+) &
+WATCHDOG_PID=$!
 echo ""
 
 # Step 2.5: Start git credential proxy (Handles macOS Keychain → container git)
@@ -508,6 +521,7 @@ cleanup_all() {
     cleanup_bridge
     cleanup_git_credential_proxy
     cleanup_config
+    [ -n "${WATCHDOG_PID:-}" ] && kill "$WATCHDOG_PID" 2>/dev/null || true
     docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
 }
 
@@ -545,6 +559,9 @@ DOCKER_ARGS=(
 # Extract numeric suffix from container name (e.g., "opencode-myproject-12345" -> "12345")
 CONTAINER_ID=$(echo "$CONTAINER_NAME" | grep -o '[0-9]*$' || echo "$$")
 DOCKER_ARGS+=(-e "CONTAINER_ID=$CONTAINER_ID")
+
+# Pass host HOME so container can create a symlink and translate paths
+DOCKER_ARGS+=(-e "HOST_HOME=$HOME")
 
 # Set fake DISPLAY for clipboard tools (will be overridden by entrypoint to unique value)
 DOCKER_ARGS+=(-e "DISPLAY=:99")
@@ -636,9 +653,14 @@ if [ -n "$EXTRA_MOUNTS" ]; then
     done
 fi
 
-# Add clipboard bridge volume (always mount the persistent directory)
+# Add clipboard bridge volumes:
+#   /shared     (read-only)  host → container: paste from macOS clipboard
+#   /shared-out (read-write) container → host: copy to macOS clipboard
+CLIPBOARD_OUT_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/opencode/clipboard-out"
+mkdir -p "$CLIPBOARD_OUT_DIR"
 DOCKER_ARGS+=(
     -v "${CLIPBOARD_DIR}:/shared:ro"
+    -v "${CLIPBOARD_OUT_DIR}:/shared-out"
 )
 
 # Add URL bridge volume and env var if bridge started successfully

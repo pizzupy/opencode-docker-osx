@@ -5,12 +5,14 @@
 # Supports multiple instances via PID file locking
 #
 
-set -euo pipefail
+# Note: intentionally no 'set -e' — this is a long-running daemon and must
+# survive transient errors (clipboard service hiccups, osascript failures, etc.)
 
 SHARED_DIR="${1:-}"
+SHARED_OUT_DIR="${2:-}"  # Optional: directory for container → host clipboard
 
 if [ -z "$SHARED_DIR" ]; then
-    echo "Usage: $0 <shared-directory>" >&2
+    echo "Usage: $0 <shared-directory> [outbound-directory]" >&2
     exit 1
 fi
 
@@ -44,6 +46,8 @@ trap cleanup EXIT INT TERM
 # Track last clipboard content to avoid unnecessary writes
 LAST_TEXT=""
 LAST_IMAGE_HASH=""
+LAST_OUT_TEXT=""
+LAST_OUT_IMAGE_HASH=""
 
 echo "[clipboard-sync] Starting clipboard sync to $SHARED_DIR (PID: $$)"
 echo "[clipboard-sync] Polling every 300ms..."
@@ -94,5 +98,26 @@ while true; do
         fi
     fi
     
+    # Container → host clipboard (if outbound dir is configured)
+    if [ -n "$SHARED_OUT_DIR" ]; then
+        # Text outbound
+        if [ -f "$SHARED_OUT_DIR/clipboard-out.txt" ]; then
+            OUT_TEXT=$(cat "$SHARED_OUT_DIR/clipboard-out.txt" 2>/dev/null || echo "")
+            if [ -n "$OUT_TEXT" ] && [ "$OUT_TEXT" != "$LAST_OUT_TEXT" ]; then
+                echo -n "$OUT_TEXT" | pbcopy 2>/dev/null || true
+                LAST_OUT_TEXT="$OUT_TEXT"
+            fi
+        fi
+        # Image outbound
+        if [ -f "$SHARED_OUT_DIR/clipboard-out.b64" ]; then
+            OUT_IMAGE_HASH=$(md5 -q "$SHARED_OUT_DIR/clipboard-out.b64" 2>/dev/null || echo "")
+            if [ -n "$OUT_IMAGE_HASH" ] && [ "$OUT_IMAGE_HASH" != "$LAST_OUT_IMAGE_HASH" ]; then
+                base64 -d "$SHARED_OUT_DIR/clipboard-out.b64" | \
+                    osascript -e 'set the clipboard to (read (POSIX file "/dev/stdin") as TIFF picture)' 2>/dev/null || true
+                LAST_OUT_IMAGE_HASH="$OUT_IMAGE_HASH"
+            fi
+        fi
+    fi
+
     sleep 0.3
 done

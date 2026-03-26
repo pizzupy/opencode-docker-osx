@@ -1,62 +1,67 @@
 #!/usr/bin/env bash
 #
-# xclip wrapper that reads from macOS clipboard bridge
-# This intercepts clipboard paste operations in the container
+# xclip wrapper that bridges macOS clipboard to/from the container.
+#
+# Read (paste):  serves content from /shared (written by clipboard-sync.sh on host)
+# Write (copy):  writes content to /shared-out (picked up by clipboard-sync.sh on host)
 #
 
 BRIDGE_PATH="/shared/clipboard"
+BRIDGE_OUT_DIR="/shared-out"
 REAL_XCLIP="/usr/bin/xclip.real"
-LOG="/tmp/xclip-debug.log"
 
-# Log the call for debugging
-echo "$(date): xclip called with args: $*" >> "$LOG"
-
-# Check if this is a read operation
+# Determine operation direction
 IS_READ=false
-if [[ "$*" == *"-o"* ]] || [[ "$*" == *"--out"* ]] || [[ "$*" == *"-selection"* ]]; then
-    IS_READ=true
-fi
+for arg in "$@"; do
+    if [[ "$arg" == "-o" || "$arg" == "--out" ]]; then
+        IS_READ=true
+        break
+    fi
+done
 
-# If reading from clipboard
+# --- READ (paste) ---
 if [ "$IS_READ" = true ]; then
-    echo "$(date): Reading clipboard" >> "$LOG"
-    
     if [ -f "$BRIDGE_PATH.mime" ]; then
         MIME=$(cat "$BRIDGE_PATH.mime" 2>/dev/null || echo "")
-        echo "$(date): MIME: $MIME" >> "$LOG"
-        
-        # Check if requesting image specifically
+
+        # Image requested specifically
         if [[ "$*" == *"image/png"* ]] || [[ "$*" == *"-t image"* ]]; then
-            echo "$(date): Image requested" >> "$LOG"
-            
-            # Check if we have an image
             if [[ "$MIME" == *"image"* ]] && [ -f "$BRIDGE_PATH.b64" ]; then
-                # Decode base64 and output raw image data
-                echo "$(date): Returning image (base64 decoded)" >> "$LOG"
                 base64 -d "$BRIDGE_PATH.b64"
                 exit 0
             else
-                echo "$(date): No image available" >> "$LOG"
-                # No image, exit with error
                 exit 1
             fi
         fi
-        
-        # Text clipboard request
+
+        # Text
         if [[ "$MIME" == *"text"* ]] && [ -f "$BRIDGE_PATH.txt" ]; then
-            echo "$(date): Returning text" >> "$LOG"
             cat "$BRIDGE_PATH.txt"
             exit 0
         fi
-    else
-        echo "$(date): No bridge file found" >> "$LOG"
     fi
-fi
 
-# Fall back to real xclip
-echo "$(date): Falling back to real xclip" >> "$LOG"
-if [ -x "$REAL_XCLIP" ]; then
-    exec "$REAL_XCLIP" "$@"
-else
+    # Fall back to real xclip
+    [ -x "$REAL_XCLIP" ] && exec "$REAL_XCLIP" "$@"
     exit 1
 fi
+
+# --- WRITE (copy) ---
+if [ -d "$BRIDGE_OUT_DIR" ]; then
+    # Check if writing an image
+    if [[ "$*" == *"image/png"* ]] || [[ "$*" == *"-t image"* ]]; then
+        base64 > "$BRIDGE_OUT_DIR/clipboard-out.b64"
+        echo "image/png" > "$BRIDGE_OUT_DIR/clipboard-out.mime"
+        exit 0
+    fi
+
+    # Default: write text
+    CONTENT=$(cat)
+    printf '%s' "$CONTENT" > "$BRIDGE_OUT_DIR/clipboard-out.txt"
+    echo "text/plain" > "$BRIDGE_OUT_DIR/clipboard-out.mime"
+    exit 0
+fi
+
+# Fall back to real xclip for write
+[ -x "$REAL_XCLIP" ] && exec "$REAL_XCLIP" "$@"
+exit 0

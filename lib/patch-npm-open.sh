@@ -5,53 +5,19 @@
 
 set -e
 
-# Create the bridge wrapper for xdg-open with enhanced logging
+# Create the bridge wrapper for xdg-open (used by Node's bundled open packages)
 cat > /usr/local/bin/xdg-open-bridge << 'EOF'
 #!/bin/bash
-# Bridge wrapper for Node's open package - WITH ENHANCED LOGGING
-
-# UNCONDITIONAL LOGGING - Log that we were called, no matter what
-LOG_FILE="/tmp/xdg-open-bridge-calls.log"
-echo "=== XDG-OPEN-BRIDGE CALLED ===" >> "$LOG_FILE" 2>&1 || true
-echo "Time: $(date)" >> "$LOG_FILE" 2>&1 || true
-echo "Args: $*" >> "$LOG_FILE" 2>&1 || true
-echo "PWD: $PWD" >> "$LOG_FILE" 2>&1 || true
-echo "PID: $$, PPID: $PPID" >> "$LOG_FILE" 2>&1 || true
+# Bridge wrapper for Node's open package — delegates to container-open-wrapper
 
 URL="$1"
-echo "URL to open: $URL" >> "$LOG_FILE" 2>&1 || true
 
-# If bridge is available, use it
 if [ -f "${URL_BRIDGE_CONFIG:-/tmp/url-bridge/bridge.conf}" ]; then
-    echo "Bridge config found" >> "$LOG_FILE" 2>&1 || true
-    source "${URL_BRIDGE_CONFIG}"
-    
-    # Debug: Uncomment to log port and partial token
-    # echo "PORT=$PORT, TOKEN=${TOKEN:0:10}..." >> "$LOG_FILE" 2>&1 || true
-    
-    # Call the bridge
-    response=$(curl -s -w "\n%{http_code}" --max-time 5 \
-        -X POST \
-        -H "Content-Type: application/json" \
-        -H "Authorization: Bearer ${TOKEN}" \
-        -d "{\"url\":\"$URL\"}" \
-        "http://host.docker.internal:${PORT}/open" 2>&1) || {
-        echo "ERROR: curl failed: $response" >> "$LOG_FILE" 2>&1 || true
-        exit 0
-    }
-    
-    http_code=$(echo "$response" | tail -n 1)
-    echo "Bridge response: HTTP $http_code" >> "$LOG_FILE" 2>&1 || true
-    echo "==================" >> "$LOG_FILE" 2>&1 || true
-    
-    exit 0
-else
-    echo "Bridge config NOT found at ${URL_BRIDGE_CONFIG:-/tmp/url-bridge/bridge.conf}" >> "$LOG_FILE" 2>&1 || true
-    echo "==================" >> "$LOG_FILE" 2>&1 || true
-    # Bridge not available, just exit successfully
-    # so mcp-remote doesn't fail
-    exit 0
+    exec /usr/local/bin/container-open-wrapper "$URL"
 fi
+
+# Bridge not available — exit successfully so callers don't fail
+exit 0
 EOF
 
 chmod +x /usr/local/bin/xdg-open-bridge
@@ -62,7 +28,6 @@ patch_open_packages() {
     # This catches bundled xdg-open in playwright, open, and any other packages
     find /root/.npm -name "xdg-open" -type f 2>/dev/null | while read xdg_open; do
         if [ -f "$xdg_open" ] && [ ! -f "${xdg_open}.original" ]; then
-            echo "Patching: $xdg_open" >> /tmp/patch-npm-open.log 2>&1 || true
             mv "$xdg_open" "${xdg_open}.original"
             cp /usr/local/bin/xdg-open-bridge "$xdg_open"
             chmod +x "$xdg_open"

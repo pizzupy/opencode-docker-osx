@@ -76,6 +76,14 @@ class URLOpenerHandler(BaseHTTPRequestHandler):
             self.send_error(413, "URL Too Long")
             return
         
+        # Handle bare paths (no scheme) — treat as file paths
+        if not url.startswith(('http://', 'https://', 'file://')):
+            if url.startswith('/'):
+                url = f'file://{url}'
+            else:
+                self.send_error(400, f"Bad Request: Cannot determine how to open: {url!r}")
+                return
+        
         # Parse and validate URL scheme
         try:
             parsed = urlparse(url)

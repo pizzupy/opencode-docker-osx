@@ -53,6 +53,10 @@ RUN chmod +x /usr/local/bin/xsel-wrapper && \
     ln -sf /usr/local/bin/xsel-wrapper /usr/bin/xsel && \
     echo "Clipboard bridge wrapper installed (xsel)"
 
+# Install editor bridge (used as $EDITOR for opencode's /export command)
+COPY lib/editor-bridge.sh /usr/local/bin/editor-bridge
+RUN chmod +x /usr/local/bin/editor-bridge
+
 # Install OpenCode entrypoint and process monitor
 COPY lib/opencode-entrypoint-tty.sh /usr/local/bin/opencode-entrypoint-tty
 COPY lib/monitor-processes.sh /usr/local/bin/monitor-processes.sh
@@ -74,5 +78,5 @@ RUN echo "=== OpenCode Layer ===" && \
 # Set working directory
 WORKDIR /workspace
 
-# Default command - run opencode via entrypoint (starts Xvfb for clipboard)
-CMD ["opencode-entrypoint"]
+# Default command - run opencode via TTY-preserving entrypoint
+CMD ["opencode-entrypoint-tty"]

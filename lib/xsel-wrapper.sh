@@ -1,36 +1,59 @@
 #!/usr/bin/env bash
 #
-# xsel wrapper that reads from macOS clipboard bridge
-# This intercepts clipboard paste operations in the container
+# xsel wrapper that bridges macOS clipboard to/from the container.
+#
+# Read (paste):  serves content from /shared (written by clipboard-sync.sh on host)
+# Write (copy):  writes content to /shared-out (picked up by clipboard-sync.sh on host)
 #
 
 BRIDGE_PATH="/shared/clipboard"
+BRIDGE_OUT_DIR="/shared-out"
 REAL_XSEL="/usr/bin/xsel.real"
 
-# If reading from clipboard (paste operation)
-if [[ "$*" == *"-o"* ]] || [[ "$*" == *"--output"* ]] || [ $# -eq 0 ]; then
-    # Check if bridge is available
+# Determine operation direction
+IS_READ=false
+IS_WRITE=false
+for arg in "$@"; do
+    if [[ "$arg" == "-o" || "$arg" == "--output" ]]; then
+        IS_READ=true
+    fi
+    if [[ "$arg" == "-i" || "$arg" == "--input" ]]; then
+        IS_WRITE=true
+    fi
+done
+# xsel with no args defaults to output (read)
+if [ $# -eq 0 ]; then
+    IS_READ=true
+fi
+
+# --- READ (paste) ---
+if [ "$IS_READ" = true ]; then
     if [ -f "$BRIDGE_PATH.mime" ]; then
         MIME=$(cat "$BRIDGE_PATH.mime" 2>/dev/null || echo "")
-        
-        # For text clipboard
+
         if [[ "$MIME" == *"text"* ]] && [ -f "$BRIDGE_PATH.txt" ]; then
             cat "$BRIDGE_PATH.txt"
             exit 0
         fi
-        
-        # For images, output base64
+
         if [[ "$MIME" == *"image"* ]] && [ -f "$BRIDGE_PATH.b64" ]; then
-            cat "$BRIDGE_PATH.b64"
+            base64 -d "$BRIDGE_PATH.b64"
             exit 0
         fi
     fi
-fi
 
-# Fall back to real xsel for all other operations (or if bridge not available)
-if [ -x "$REAL_XSEL" ]; then
-    exec "$REAL_XSEL" "$@"
-else
-    # If real xsel doesn't exist, just return empty
+    [ -x "$REAL_XSEL" ] && exec "$REAL_XSEL" "$@"
     exit 0
 fi
+
+# --- WRITE (copy) ---
+if [ "$IS_WRITE" = true ] && [ -d "$BRIDGE_OUT_DIR" ]; then
+    CONTENT=$(cat)
+    printf '%s' "$CONTENT" > "$BRIDGE_OUT_DIR/clipboard-out.txt"
+    echo "text/plain" > "$BRIDGE_OUT_DIR/clipboard-out.mime"
+    exit 0
+fi
+
+# Fall back to real xsel
+[ -x "$REAL_XSEL" ] && exec "$REAL_XSEL" "$@"
+exit 0

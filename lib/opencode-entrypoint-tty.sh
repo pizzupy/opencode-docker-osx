@@ -17,6 +17,22 @@ mkdir -p "$LOG_DIR"
 
 echo "[Container] Instance ID: $CONTAINER_ID (Display :$DISPLAY_NUM)"
 
+# Set EDITOR to the bridge script so opencode's /export opens files on the host
+export EDITOR=/usr/local/bin/editor-bridge
+export VISUAL=/usr/local/bin/editor-bridge
+
+# Create a symlink from the host home path to /root so that paths like
+# /Users/jan.kirsten/... resolve correctly inside the container.
+# This avoids confusion when opencode or agents reference ~/... paths.
+if [ -n "${HOST_HOME:-}" ] && [ "$HOST_HOME" != "/root" ]; then
+    HOST_HOME_PARENT=$(dirname "$HOST_HOME")
+    mkdir -p "$HOST_HOME_PARENT"
+    if [ ! -e "$HOST_HOME" ]; then
+        ln -sf /root "$HOST_HOME"
+        echo "[Container] Created symlink: $HOST_HOME -> /root"
+    fi
+fi
+
 # Start Xvfb for clipboard support (in case xsel/xclip are used)
 # Use unique display number to avoid conflicts when containers share /tmp
 echo "[Container] Starting Xvfb on display :$DISPLAY_NUM..."
