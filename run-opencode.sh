@@ -221,6 +221,15 @@ if [ "${1:-}" = "stop" ]; then
     exit 0
 fi
 
+# Detect ACP mode - must come before docker args are built
+IS_ACP_MODE=false
+if [ "${1:-}" = "acp" ]; then
+    IS_ACP_MODE=true
+    # ACP uses JSON-RPC over stdio: save real stdout on fd3, then redirect
+    # all script output to stderr so nothing corrupts the JSON stream.
+    exec 3>&1 1>&2
+fi
+
 echo -e "${GREEN}=== OpenCode Docker with OAuth Support ===${NC}"
 echo ""
 
@@ -539,7 +548,7 @@ echo ""
 # No need to clean up - random suffix prevents collisions
 
 DOCKER_ARGS=(
-    -it
+    $([ "$IS_ACP_MODE" = true ] && echo "-i" || echo "-it")
     --rm
     -v "$HOME/.cache/opencode:/root/.cache/opencode"
     -v "$HOME/.local/state/opencode:/root/.local/state/opencode"
@@ -563,8 +572,15 @@ DOCKER_ARGS+=(-e "CONTAINER_ID=$CONTAINER_ID")
 # Pass host HOME so container can create a symlink and translate paths
 DOCKER_ARGS+=(-e "HOST_HOME=$HOME")
 
-# Set fake DISPLAY for clipboard tools (will be overridden by entrypoint to unique value)
-DOCKER_ARGS+=(-e "DISPLAY=:99")
+# Set DISPLAY: forward to XQuartz if running, otherwise use virtual framebuffer.
+# XQuartz creates /tmp/.X11-unix/X0 when active; that's the most reliable indicator.
+if [ -S /tmp/.X11-unix/X0 ] || pgrep -x "X11.bin" > /dev/null 2>&1 || pgrep -x "quartz-wm" > /dev/null 2>&1; then
+    DOCKER_ARGS+=(-e "DISPLAY=host.docker.internal:0")
+    echo -e "  Display: ${GREEN}XQuartz detected → forwarding X11 (headed browser supported)${NC}"
+else
+    # Fake DISPLAY for clipboard tools (will be overridden by entrypoint to unique value)
+    DOCKER_ARGS+=(-e "DISPLAY=:99")
+fi
 
 # Pass through TERM for proper terminal features (clipboard, colors, etc.)
 # Default to xterm-256color if not set
@@ -663,6 +679,8 @@ DOCKER_ARGS+=(
     -v "${CLIPBOARD_OUT_DIR}:/shared-out"
 )
 
+
+
 # Add URL bridge volume and env var if bridge started successfully
 if [ -n "$BRIDGE_DIR" ] && [ -d "$BRIDGE_DIR" ]; then
     DOCKER_ARGS+=(
@@ -674,12 +692,20 @@ fi
 echo ""
 echo -e "${GREEN}Launching OpenCode...${NC}"
 echo ""
-echo -e "${YELLOW}Note: If you authenticate CLI tools (gh, etc.) after starting,${NC}"
-echo -e "${YELLOW}      you'll need to restart the container to use them.${NC}"
-echo ""
 
-# Run docker with TTY-preserving entrypoint
-echo "[Host] Executing docker run command..."
-docker run "${DOCKER_ARGS[@]}" "$IMAGE" opencode-entrypoint-tty "$@"
+if [ "$IS_ACP_MODE" = true ]; then
+    # ACP mode: opencode acp speaks JSON-RPC over stdio.
+    # All startup noise must go to stderr so it doesn't corrupt the JSON stream.
+    # Run opencode directly (no TTY entrypoint) with stdin kept open (-i).
+    exec docker run "${DOCKER_ARGS[@]}" "$IMAGE" opencode "$@" 1>&3 2>/dev/null
+else
+    echo -e "${YELLOW}Note: If you authenticate CLI tools (gh, etc.) after starting,${NC}"
+    echo -e "${YELLOW}      you'll need to restart the container to use them.${NC}"
+    echo ""
+
+    # Run docker with TTY-preserving entrypoint
+    echo "[Host] Executing docker run command..."
+    docker run "${DOCKER_ARGS[@]}" "$IMAGE" opencode-entrypoint-tty "$@"
+fi
 
 # Cleanup happens automatically via trap
