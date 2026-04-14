@@ -83,16 +83,19 @@ find_available_port() {
 VENV_CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/opencode/docker-venvs"
 mkdir -p "$VENV_CACHE_DIR/poetry" "$VENV_CACHE_DIR/uv"
 
+# Sanitized project name derived from the current directory (used for container
+# naming and per-project volume paths to avoid cross-session lock conflicts)
+PROJECT_NAME=$(basename "$PWD" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/^-*//' | sed 's/-*$//')
+mkdir -p "$HOME/.local/state/opencode/$PROJECT_NAME"
+
 # Function to generate container name based on current directory
 get_container_name() {
-    local folder_name=$(basename "$PWD" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/^-*//' | sed 's/-*$//')
-    echo "opencode-$folder_name-${RANDOM}"
+    echo "opencode-$PROJECT_NAME-${RANDOM}"
 }
 
 # Function to find running container for current directory
 find_running_container() {
-    local folder_name=$(basename "$PWD" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/^-*//' | sed 's/-*$//')
-    docker ps --filter "name=^opencode-$folder_name-" --format '{{.Names}}' | head -1
+    docker ps --filter "name=^opencode-$PROJECT_NAME-" --format '{{.Names}}' | head -1
 }
 
 # Optional user-specific directory mounts (set via environment variables)
@@ -122,9 +125,14 @@ show_usage() {
     echo "Environment Variables:"
     echo "  DOCKER_ENV               Comma/space-separated env vars to pass through"
     echo "  PROXY_PORT               MCP proxy port (default: 8080)"
+    echo "  SERVE_PORT               Container port for 'serve'/'web' verbs (default: 4096)"
+    echo "                           A free host port is auto-selected starting from this value"
     echo ""
     echo "Examples:"
     echo "  $0                                    # Start OpenCode"
+    echo "  $0 serve                              # Start headless server (auto port-mapped)"
+    echo "  $0 web                                # Start web interface (auto port-mapped)"
+    echo "  SERVE_PORT=8888 $0 serve              # Use port 8888"
     echo "  $0 enter                              # Enter a container"
     echo "  $0 logs -f --tail 50                  # Follow logs with last 50 lines"
     echo "  $0 stop                               # Stop a container"
@@ -228,6 +236,35 @@ if [ "${1:-}" = "acp" ]; then
     # ACP uses JSON-RPC over stdio: save real stdout on fd3, then redirect
     # all script output to stderr so nothing corrupts the JSON stream.
     exec 3>&1 1>&2
+fi
+
+# Detect serve/web mode - opencode binds to 127.0.0.1 by default which is
+# unreachable from outside the container. We need to:
+#   1. Override --hostname to 0.0.0.0 so it binds on all interfaces
+#   2. Pick a fixed port (so we can map it with -p) and inject --port
+#   3. Add the -p HOST_PORT:CONTAINER_PORT mapping to docker args
+IS_SERVE_MODE=false
+SERVE_VERB=""
+for arg in "$@"; do
+    if [ "$arg" = "serve" ] || [ "$arg" = "web" ]; then
+        IS_SERVE_MODE=true
+        SERVE_VERB="$arg"
+        break
+    fi
+done
+
+SERVE_PORT=""
+HOST_SERVE_PORT=""
+if [ "$IS_SERVE_MODE" = true ]; then
+    # Allow overriding via env; default container port is 4096
+    SERVE_PORT="${SERVE_PORT:-4096}"
+    # Find an available host port starting from the same value
+    HOST_SERVE_PORT=$(find_available_port "$SERVE_PORT")
+    if [ -z "$HOST_SERVE_PORT" ]; then
+        echo -e "${RED}✗ Could not find an available host port for opencode serve${NC}"
+        exit 1
+    fi
+    export SERVE_PORT HOST_SERVE_PORT
 fi
 
 echo -e "${GREEN}=== OpenCode Docker with OAuth Support ===${NC}"
@@ -484,28 +521,55 @@ if [ -d "$HOME/.config/opencode" ]; then
         fi
         
         # Config is valid, proceed with translation
-        TRANSLATION_ERROR=""
-        if ! python3 "$SCRIPT_DIR/lib/detect-remote-mcps.py" \
+        TRANSLATION_LOG=$(mktemp /tmp/config-translation-XXXXXX.log)
+        python3 "$SCRIPT_DIR/lib/detect-remote-mcps.py" \
             --config "$HOME/.config/opencode/opencode.jsonc" \
             --output "$HOME/.cache/mcp-proxy-config.json" \
             --docker-config "$TEMP_CONFIG_FILE" \
             --port "$PROXY_PORT" \
             --docker \
-            2>&1 | tee /tmp/config-translation-error.log; then
-            TRANSLATION_ERROR=$(cat /tmp/config-translation-error.log)
-        fi
-        
-        if [ -n "$TRANSLATION_ERROR" ] || [ ! -f "$TEMP_CONFIG_FILE" ]; then
-            echo -e "${RED}✗ Config translation failed!${NC}"
-            echo -e "${RED}Error:${NC}"
-            echo "$TRANSLATION_ERROR" | head -10
+            2>&1 | tee "$TRANSLATION_LOG"
+        TRANSLATION_EXIT=${PIPESTATUS[0]}
+
+        if [ "$TRANSLATION_EXIT" -ne 0 ] || [ ! -f "$TEMP_CONFIG_FILE" ]; then
+            echo -e "${RED}✗ Config translation failed (exit code: $TRANSLATION_EXIT)!${NC}"
+            if [ ! -f "$TEMP_CONFIG_FILE" ]; then
+                echo -e "${RED}  Output config was not created: $TEMP_CONFIG_FILE${NC}"
+            fi
             echo ""
+            echo "Full output logged to: $TRANSLATION_LOG"
             echo "Cannot start OpenCode with broken config translation."
             rm -rf "$TEMP_CONFIG_DIR"
             exit 1
         fi
-        
+        rm -f "$TRANSLATION_LOG"
+
         echo -e "${GREEN}✓ Config validated and translated for Docker${NC}"
+
+        # Restart mcp-proxy only if the config changed, to pick up new servers or
+         # --allow-http flags. Uses mkdir-based locking (atomic on macOS, unlike flock).
+         PROXY_CONFIG_CHECKSUM_FILE="$HOME/.cache/mcp-proxy-config.checksum"
+         PROXY_RESTART_LOCK="$HOME/.cache/mcp-proxy-restart.lock.d"
+         NEW_CHECKSUM=$(md5 -q "$HOME/.cache/mcp-proxy-config.json" 2>/dev/null || md5sum "$HOME/.cache/mcp-proxy-config.json" 2>/dev/null | awk '{print $1}')
+
+         if mkdir "$PROXY_RESTART_LOCK" 2>/dev/null; then
+             trap "rmdir '$PROXY_RESTART_LOCK' 2>/dev/null" EXIT
+             OLD_CHECKSUM=$(cat "$PROXY_CONFIG_CHECKSUM_FILE" 2>/dev/null || echo "")
+             if [ "$NEW_CHECKSUM" != "$OLD_CHECKSUM" ]; then
+                 echo "mcp-proxy config changed — restarting to pick up new config..."
+                 if "$SCRIPT_DIR/manage-mcp-proxy.sh" restart >/dev/null 2>&1; then
+                     echo "$NEW_CHECKSUM" > "$PROXY_CONFIG_CHECKSUM_FILE"
+                     echo -e "${GREEN}✓ mcp-proxy restarted with updated config${NC}"
+                 else
+                     echo -e "${YELLOW}⚠ mcp-proxy restart failed — check logs: $HOME/.cache/mcp-proxy.log${NC}"
+                 fi
+             else
+                 echo -e "${GREEN}✓ mcp-proxy config unchanged, no restart needed${NC}"
+             fi
+             rmdir "$PROXY_RESTART_LOCK" 2>/dev/null
+         else
+             echo -e "${GREEN}✓ mcp-proxy config update handled by another instance${NC}"
+         fi
     else
         echo -e "${YELLOW}⚠ No opencode.jsonc found, using directory structure only${NC}"
         echo '{}' > "$TEMP_CONFIG_FILE"
@@ -536,12 +600,18 @@ cleanup_all() {
 
 trap cleanup_all EXIT INT TERM
 
+# Ensure persistent memory/journal dirs exist on the host before mounting
+mkdir -p "$HOME/.config/opencode/memory" "$HOME/.config/opencode/journal"
+
 # Step 5: Build docker command
 echo "Starting OpenCode in Docker..."
 echo -e "  Image: ${GREEN}$IMAGE${NC}"
 echo -e "  OAuth proxy: ${GREEN}host.docker.internal:$PROXY_PORT${NC}"
 if [ "$CLIPBOARD_READY" = true ]; then
     echo -e "  Clipboard: ${GREEN}macOS → container (shared)${NC}"
+fi
+if [ "$IS_SERVE_MODE" = true ]; then
+    echo -e "  Serve mode: ${GREEN}$SERVE_VERB → http://localhost:$HOST_SERVE_PORT${NC}"
 fi
 echo ""
 
@@ -551,11 +621,19 @@ DOCKER_ARGS=(
     $([ "$IS_ACP_MODE" = true ] && echo "-i" || echo "-it")
     --rm
     -v "$HOME/.cache/opencode:/root/.cache/opencode"
-    -v "$HOME/.local/state/opencode:/root/.local/state/opencode"
+    -v "$HOME/.local/state/opencode/$PROJECT_NAME:/root/.local/state/opencode"
     -v "$HOME/.local/share/opencode:/root/.local/share/opencode"
     -v "$HOME/.cache/opencode-docker/:/root/.cache"
+    # Named volume for Playwright browsers — Docker auto-seeds from image on first use,
+    # so browsers are available immediately without a separate install step.
+    # Survives container restarts; delete with: docker volume rm opencode-ms-playwright
+    -v "opencode-ms-playwright:/root/.cache/ms-playwright"
     # -v "$HOME/.gitconfig:/root/.gitconfig"
     -v "$TEMP_CONFIG_DIR:/root/.config/opencode"
+    -v "$HOME/.config/opencode:/root/.config/opencode-host:ro"
+    # Persist agent memory and journal through the temp config overlay
+    -v "$HOME/.config/opencode/memory:/root/.config/opencode/memory"
+    -v "$HOME/.config/opencode/journal:/root/.config/opencode/journal"
     -v "$PWD:$PWD"
     -w "${PWD:-/root}"
     --name "$CONTAINER_NAME"
@@ -564,6 +642,11 @@ DOCKER_ARGS=(
     # -v "$VENV_CACHE_DIR/uv:/root/.cache/uv/venvs"
 )
 
+# Expose serve/web port when needed
+if [ "$IS_SERVE_MODE" = true ]; then
+    DOCKER_ARGS+=(-p "${HOST_SERVE_PORT}:${SERVE_PORT}")
+fi
+
 # Generate unique container ID from container name (to avoid conflicts when sharing /tmp)
 # Extract numeric suffix from container name (e.g., "opencode-myproject-12345" -> "12345")
 CONTAINER_ID=$(echo "$CONTAINER_NAME" | grep -o '[0-9]*$' || echo "$$")
@@ -571,6 +654,10 @@ DOCKER_ARGS+=(-e "CONTAINER_ID=$CONTAINER_ID")
 
 # Pass host HOME so container can create a symlink and translate paths
 DOCKER_ARGS+=(-e "HOST_HOME=$HOME")
+
+# Pass the host-side state dir so editor-bridge can translate /root/.local/state/opencode
+# to the correct host path (which is project-namespaced: ~/.local/state/opencode/<project>)
+DOCKER_ARGS+=(-e "HOST_STATE_DIR=$HOME/.local/state/opencode/$PROJECT_NAME")
 
 # Set DISPLAY: forward to XQuartz if running, otherwise use virtual framebuffer.
 # XQuartz creates /tmp/.X11-unix/X0 when active; that's the most reliable indicator.
@@ -651,10 +738,22 @@ if [ -f "$HOME/.gitconfig" ]; then
     echo -e "  Git config: ${GREEN}mounted (read-only)${NC}"
 fi
 
+echo -e "  Real config (ro): ${GREEN}$HOME/.config/opencode → /root/.config/opencode-host${NC}"
+
 # Add optional user-specific mounts if environment variables are set
 if [ -n "$OPENCODE_CONFIG_DIR" ]; then
     DOCKER_ARGS+=(-v "$OPENCODE_CONFIG_DIR:/root/.config/opencode")
     echo -e "  Config override: ${GREEN}$OPENCODE_CONFIG_DIR${NC}"
+fi
+
+# Mount real (untranslated) opencode config read-write at the host path so it
+# can be edited from inside the container. Opencode itself still uses the
+# translated config at /root/.config/opencode; this mount lands at
+# $HOST_HOME/.config/opencode (e.g. /Users/jan.kirsten/.config/opencode) which
+# is a different path from /root/.config/opencode inside the container.
+if [ "${MOUNT_OPENCODE_CONFIG:-0}" = "1" ]; then
+    DOCKER_ARGS+=(-v "$HOME/.config/opencode:$HOME/.config/opencode")
+    echo -e "  Real config (rw): ${GREEN}$HOME/.config/opencode${NC}"
 fi
 
 # Add extra mounts from EXTRA_MOUNTS (comma or space separated)
@@ -693,11 +792,31 @@ echo ""
 echo -e "${GREEN}Launching OpenCode...${NC}"
 echo ""
 
+# Build final opencode args, injecting serve flags when needed.
+# opencode serve/web defaults to --hostname 127.0.0.1 (loopback only), which is
+# unreachable from outside the container. Force 0.0.0.0 and a fixed port so the
+# -p mapping we added to DOCKER_ARGS above actually works.
+OPENCODE_ARGS=()
+if [ $# -gt 0 ]; then
+    OPENCODE_ARGS=("$@")
+fi
+if [ "$IS_SERVE_MODE" = true ]; then
+    # Only inject if the user hasn't already supplied these flags
+    if ! printf '%s\n' "${OPENCODE_ARGS[@]}" | grep -q -- '--hostname'; then
+        OPENCODE_ARGS+=(--hostname 0.0.0.0)
+    fi
+    if ! printf '%s\n' "${OPENCODE_ARGS[@]}" | grep -q -- '--port'; then
+        OPENCODE_ARGS+=(--port "$SERVE_PORT")
+    fi
+    echo -e "${GREEN}  → Connect at: http://localhost:${HOST_SERVE_PORT}${NC}"
+    echo ""
+fi
+
 if [ "$IS_ACP_MODE" = true ]; then
     # ACP mode: opencode acp speaks JSON-RPC over stdio.
     # All startup noise must go to stderr so it doesn't corrupt the JSON stream.
     # Run opencode directly (no TTY entrypoint) with stdin kept open (-i).
-    exec docker run "${DOCKER_ARGS[@]}" "$IMAGE" opencode "$@" 1>&3 2>/dev/null
+    exec docker run "${DOCKER_ARGS[@]}" "$IMAGE" opencode ${OPENCODE_ARGS[@]+"${OPENCODE_ARGS[@]}"} 1>&3 2>/dev/null
 else
     echo -e "${YELLOW}Note: If you authenticate CLI tools (gh, etc.) after starting,${NC}"
     echo -e "${YELLOW}      you'll need to restart the container to use them.${NC}"
@@ -705,7 +824,7 @@ else
 
     # Run docker with TTY-preserving entrypoint
     echo "[Host] Executing docker run command..."
-    docker run "${DOCKER_ARGS[@]}" "$IMAGE" opencode-entrypoint-tty "$@"
+    docker run "${DOCKER_ARGS[@]}" "$IMAGE" opencode-entrypoint-tty ${OPENCODE_ARGS[@]+"${OPENCODE_ARGS[@]}"}
 fi
 
 # Cleanup happens automatically via trap

@@ -327,8 +327,13 @@ RUN uv pip install --system \
     # Browser automation
     playwright
 
-# Install Playwright browser binaries (chromium + system deps)
-RUN uv run --with playwright python -m playwright install chromium --with-deps
+# Install Playwright browser binaries for both Python and Node.js playwright.
+# Both share the same ~/.cache/ms-playwright binary cache.
+# Python playwright installs the latest chromium revision; Node playwright's
+# npx playwright install will reuse the same binary if versions are compatible,
+# or install its own revision otherwise.
+RUN uv run --with playwright python -m playwright install chromium --with-deps && \
+    npx playwright install chromium --with-deps
 
 # ============================================================================
 # Shell configurations
@@ -356,12 +361,14 @@ RUN mkdir -p /root/.ssh && \
     echo "GitHub SSH host keys added to known_hosts"
 
 # Add useful aliases to bashrc
+# Source /etc/environment so docker exec shells pick up DISPLAY set by the entrypoint
 RUN echo 'alias ll="eza -la --git"' >> /root/.bashrc && \
     echo 'alias ls="eza"' >> /root/.bashrc && \
     echo 'alias cat="bat"' >> /root/.bashrc && \
     echo 'alias find="fd"' >> /root/.bashrc && \
     echo 'alias grep="rg"' >> /root/.bashrc && \
-    echo 'export PATH="/usr/local/bin:$PATH"' >> /root/.bashrc
+    echo 'export PATH="/usr/local/bin:$PATH"' >> /root/.bashrc && \
+    echo '[ -f /etc/environment ] && set -a && . /etc/environment && set +a' >> /root/.bashrc
 
 # Add aliases to zshrc
 RUN echo 'alias ll="eza -la --git"' >> /root/.zshrc && \
@@ -369,7 +376,8 @@ RUN echo 'alias ll="eza -la --git"' >> /root/.zshrc && \
     echo 'alias cat="bat"' >> /root/.zshrc && \
     echo 'alias find="fd"' >> /root/.zshrc && \
     echo 'alias grep="rg"' >> /root/.zshrc && \
-    echo 'export PATH="/usr/local/bin:$PATH"' >> /root/.zshrc
+    echo 'export PATH="/usr/local/bin:$PATH"' >> /root/.zshrc && \
+    echo '[ -f /etc/environment ] && set -a && source /etc/environment && set +a' >> /root/.zshrc
 
 # Add aliases to fish config
 RUN mkdir -p /root/.config/fish && \

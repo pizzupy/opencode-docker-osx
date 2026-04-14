@@ -6,16 +6,23 @@
 
 set -euo pipefail
 
-# Generate a unique ID for this container instance
-# This prevents conflicts when multiple containers share /tmp
-CONTAINER_ID="${CONTAINER_ID:-$$}"  # Use PID if CONTAINER_ID not set
-DISPLAY_NUM=$((99 + ($CONTAINER_ID % 100)))  # Display :99-:198
+# Generate a unique ID for this container instance (for log dir naming)
+CONTAINER_ID="${CONTAINER_ID:-$$}"
 
-# Create container-specific log directory if /tmp is shared
+# Docker Desktop on macOS isolates /tmp per container, so :99 is always safe.
+# If DISPLAY was already set to a host X server (e.g. host.docker.internal:0
+# for XQuartz), preserve it — don't override with the virtual framebuffer.
+if [[ "${DISPLAY:-}" == host.docker.internal:* ]]; then
+    DISPLAY_NUM=""  # using host X11, no local Xvfb needed
+else
+    DISPLAY_NUM=99
+fi
+
+# Create container-specific log directory
 LOG_DIR="/tmp/opencode-${CONTAINER_ID}"
 mkdir -p "$LOG_DIR"
 
-echo "[Container] Instance ID: $CONTAINER_ID (Display :$DISPLAY_NUM)"
+echo "[Container] Instance ID: $CONTAINER_ID (Display: ${DISPLAY:-unset})"
 
 # Set EDITOR to the bridge script so opencode's /export opens files on the host
 export EDITOR=/usr/local/bin/editor-bridge
@@ -33,16 +40,21 @@ if [ -n "${HOST_HOME:-}" ] && [ "$HOST_HOME" != "/root" ]; then
     fi
 fi
 
-# Start Xvfb for clipboard support (in case xsel/xclip are used)
-# Use unique display number to avoid conflicts when containers share /tmp
-echo "[Container] Starting Xvfb on display :$DISPLAY_NUM..."
-Xvfb ":$DISPLAY_NUM" -screen 0 1024x768x24 > /dev/null 2>&1 &
-XVFB_PID=$!
-sleep 0.5
-
-# Update DISPLAY to match our Xvfb
-export DISPLAY=":$DISPLAY_NUM"
-echo "[Container] Xvfb started (PID: $XVFB_PID, DISPLAY: $DISPLAY)"
+# Start Xvfb unless we're forwarding to a host X server (XQuartz).
+# Xvfb provides a virtual display for Playwright and clipboard tools.
+XVFB_PID=""
+if [ -n "$DISPLAY_NUM" ]; then
+    echo "[Container] Starting Xvfb on display :$DISPLAY_NUM..."
+    Xvfb ":$DISPLAY_NUM" -screen 0 1920x1080x24 > /dev/null 2>&1 &
+    XVFB_PID=$!
+    sleep 0.5
+    export DISPLAY=":$DISPLAY_NUM"
+    # Write to /etc/environment so docker exec shells inherit the correct DISPLAY
+    echo "DISPLAY=:$DISPLAY_NUM" >> /etc/environment
+    echo "[Container] Xvfb started (PID: $XVFB_PID, DISPLAY: $DISPLAY)"
+else
+    echo "[Container] Using host X server: $DISPLAY"
+fi
 
 # Start the npm package patcher in watch mode
 # Use unique log file to avoid conflicts when containers share /tmp
@@ -74,7 +86,7 @@ cleanup() {
     # Kill the entire process group to catch backgrounded children
     kill -- -$PATCHER_PID 2>/dev/null || true
     kill $PATCHER_PID 2>/dev/null || true
-    kill $XVFB_PID 2>/dev/null || true
+    [ -n "${XVFB_PID:-}" ] && kill $XVFB_PID 2>/dev/null || true
     [ -n "${MONITOR_PID:-}" ] && kill $MONITOR_PID 2>/dev/null || true
     
     # Clean up container-specific log directory
@@ -103,15 +115,6 @@ cleanup_terminal() {
     stty sane 2>/dev/null || true
     
     echo "[Container] OpenCode exited with code $exit_code"
-    
-    # Pause to let user read cleanup messages
-    # Set to 'never' to disable, or number of seconds for timeout
-    PAUSE_ON_EXIT="${PAUSE_ON_EXIT:-5}"
-    if [ "$PAUSE_ON_EXIT" != "never" ]; then
-        echo "[Container] Press Enter to close container (or wait ${PAUSE_ON_EXIT}s)..."
-        read -t "$PAUSE_ON_EXIT" || true
-    fi
-    
     exit $exit_code
 }
 
