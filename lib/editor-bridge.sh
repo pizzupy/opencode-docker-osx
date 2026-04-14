@@ -12,16 +12,25 @@
 
 set -euo pipefail
 
+LOG_DIR="/tmp/opencode-${CONTAINER_ID:-$$}"
+mkdir -p "$LOG_DIR"
+LOG="$LOG_DIR/editor-bridge.log"
+
+log() { echo "[editor-bridge] $(date '+%T') $*" | tee -a "$LOG" >&2; }
+
 FILEPATH="${1:-}"
 if [ -z "$FILEPATH" ]; then
-    echo "Usage: $(basename "$0") <filepath>" >&2
+    log "Usage: $(basename "$0") <filepath>"
     exit 1
 fi
 
 if [ ! -f "$FILEPATH" ]; then
-    echo "Error: File not found: $FILEPATH" >&2
+    log "Error: File not found: $FILEPATH"
     exit 1
 fi
+
+log "Called with: $FILEPATH"
+log "URL_BRIDGE_CONFIG=${URL_BRIDGE_CONFIG:-/tmp/url-bridge/bridge.conf}"
 
 # Copy to a host-accessible location (opencode state dir is mounted on host)
 STATE_DIR="${XDG_STATE_HOME:-/root/.local/state}/opencode"
@@ -31,12 +40,19 @@ mkdir -p "$EXPORT_DIR"
 BASENAME=$(basename "$FILEPATH")
 DEST="$EXPORT_DIR/$BASENAME"
 cp "$FILEPATH" "$DEST"
+log "Copied to: $DEST"
 
 # Open on host via URL bridge
-if [ -f "${URL_BRIDGE_CONFIG:-/tmp/url-bridge/bridge.conf}" ]; then
-    /usr/local/bin/container-open-wrapper "$DEST" 2>/dev/null || true
+BRIDGE_CONF="${URL_BRIDGE_CONFIG:-/tmp/url-bridge/bridge.conf}"
+if [ -f "$BRIDGE_CONF" ]; then
+    log "Sending to host via URL bridge..."
+    if /usr/local/bin/container-open-wrapper "$DEST" >> "$LOG" 2>&1; then
+        log "OK — host opened the file"
+    else
+        log "WARN — container-open-wrapper exited non-zero (file still saved to: $DEST)"
+    fi
 else
-    echo "[editor-bridge] URL bridge not available, file saved to: $DEST" >&2
+    log "URL bridge not available (no bridge.conf at $BRIDGE_CONF), file saved to: $DEST"
 fi
 
 # Exit immediately — opencode reads back the (unchanged) file content

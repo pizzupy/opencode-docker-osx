@@ -57,8 +57,12 @@ if [[ "$TARGET" != *"://"* ]]; then
         TARGET="/root"
     fi
 
-    # Translate /root/... to $HOST_HOME/... for the host
-    if [[ "$TARGET" == /root/* ]]; then
+    # Translate container state dir → real host path (project-namespaced)
+    # /root/.local/state/opencode is mounted from HOST_STATE_DIR, not HOST_HOME
+    if [[ -n "${HOST_STATE_DIR:-}" ]] && [[ "$TARGET" == /root/.local/state/opencode/* ]]; then
+        TARGET="${HOST_STATE_DIR}${TARGET#/root/.local/state/opencode}"
+    # Translate /root/... to $HOST_HOME/... for everything else
+    elif [[ "$TARGET" == /root/* ]]; then
         TARGET="${HOST_HOME}${TARGET#/root}"
     elif [[ "$TARGET" == "/root" ]]; then
         TARGET="$HOST_HOME"
