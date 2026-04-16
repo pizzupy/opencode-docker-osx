@@ -120,7 +120,7 @@ show_usage() {
     echo "  $0 logs [options]         View container logs (e.g., -f --tail 100)"
     echo "  $0 ps                     List running containers"
     echo "  $0 stop                   Stop a running container (interactive selection)"
-    echo "  $0 help                   Show this help message"
+    echo "  $0 help                   Show this help message (use 'help', not --help)"
     echo ""
     echo "Environment Variables:"
     echo "  DOCKER_ENV               Comma/space-separated env vars to pass through"
@@ -140,8 +140,8 @@ show_usage() {
     exit 0
 }
 
-# Show help
-if [ "${1:-}" = "help" ] || [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+# Show help for the wrapper itself (use 'help' verb; --help/-h are forwarded to opencode)
+if [ "${1:-}" = "help" ]; then
     show_usage
 fi
 
@@ -584,7 +584,18 @@ echo ""
 # Add temp config cleanup to trap
 cleanup_config() {
     if [ -n "$TEMP_CONFIG_DIR" ] && [ -d "$TEMP_CONFIG_DIR" ]; then
-        rm -rf "$TEMP_CONFIG_DIR"
+        # Safety: only delete if path is under a known temp root (macOS or Linux)
+        case "$TEMP_CONFIG_DIR" in
+            /var/folders/*|/tmp/*)
+                # Some subdirs (memory/, journal/) are direct host mounts and may be
+                # root-owned inside the temp dir — rm -rf will fail on them. That's fine:
+                # temp dirs are cleared on reboot so any leftover empty dirs are harmless.
+                rm -rf "$TEMP_CONFIG_DIR" 2>/dev/null || true
+                ;;
+            *)
+                echo -e "${YELLOW}⚠ Skipping cleanup of unexpected temp dir: $TEMP_CONFIG_DIR${NC}"
+                ;;
+        esac
     fi
 }
 
