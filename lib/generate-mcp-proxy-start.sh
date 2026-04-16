@@ -39,6 +39,8 @@ try:
     for name, server_config in servers.items():
         command = server_config.get('command', '')
         if command:
+            # Expand ~ in any token of the command (e.g. "uv run --script ~/foo")
+            command = ' '.join(os.path.expanduser(t) for t in command.split())
             args.append(f'--named-server {name} "{command}"')
     
     print(' '.join(args))

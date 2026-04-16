@@ -35,6 +35,7 @@ RUN apt-get update && apt-get install -y \
     netcat-openbsd \
     iputils-ping \
     dnsutils \
+    socat \
     # Process tools
     htop \
     procps \

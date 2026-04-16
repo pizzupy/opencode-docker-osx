@@ -56,6 +56,16 @@ else
     echo "[Container] Using host X server: $DISPLAY"
 fi
 
+# Forward localhost:8765 -> host.docker.internal:8765 so MCP servers that
+# hardcode localhost (e.g. anki-mcp-server) can reach AnkiConnect on the host.
+SOCAT_PID=""
+if command -v socat &>/dev/null; then
+    socat TCP-LISTEN:8765,bind=127.0.0.1,fork,reuseaddr TCP:host.docker.internal:8765 \
+        > "$LOG_DIR/socat-anki.log" 2>&1 &
+    SOCAT_PID=$!
+    echo "[Container] AnkiConnect proxy started (PID: $SOCAT_PID, 127.0.0.1:8765 -> host.docker.internal:8765)"
+fi
+
 # Start the npm package patcher in watch mode
 # Use unique log file to avoid conflicts when containers share /tmp
 echo "[Container] Starting npm package patcher..."
@@ -87,6 +97,7 @@ cleanup() {
     kill -- -$PATCHER_PID 2>/dev/null || true
     kill $PATCHER_PID 2>/dev/null || true
     [ -n "${XVFB_PID:-}" ] && kill $XVFB_PID 2>/dev/null || true
+    [ -n "${SOCAT_PID:-}" ] && kill $SOCAT_PID 2>/dev/null || true
     [ -n "${MONITOR_PID:-}" ] && kill $MONITOR_PID 2>/dev/null || true
     
     # Clean up container-specific log directory
