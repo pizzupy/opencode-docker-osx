@@ -136,6 +136,28 @@ RUN ARCH=$(uname -m) && \
     mv sg /usr/local/bin/ && \
     rm ast-grep.zip
 
+# Install gitleaks (secrets scanner)
+RUN ARCH=$(dpkg --print-architecture) && \
+    GL_VERSION=$(curl -sL https://api.github.com/repos/gitleaks/gitleaks/releases/latest | grep -oP '"tag_name": "v\K([^"]+)') && \
+    echo "Installing gitleaks version: ${GL_VERSION}" && \
+    if [ "$ARCH" = "amd64" ]; then GL_ARCH="x64"; \
+    elif [ "$ARCH" = "arm64" ]; then GL_ARCH="arm64"; \
+    else GL_ARCH="$ARCH"; fi && \
+    curl -fsSL --retry 3 "https://github.com/gitleaks/gitleaks/releases/download/v${GL_VERSION}/gitleaks_${GL_VERSION}_linux_${GL_ARCH}.tar.gz" -o gitleaks.tar.gz && \
+    tar xzf gitleaks.tar.gz gitleaks && \
+    mv gitleaks /usr/local/bin/ && \
+    rm gitleaks.tar.gz
+
+# Install snip (LLM token reducer - filters verbose CLI output before it reaches AI context)
+RUN ARCH=$(dpkg --print-architecture) && \
+    SNIP_VERSION=$(curl -sL https://api.github.com/repos/edouard-claude/snip/releases/latest | grep -oP '"tag_name": "\K(.*)(?=")') && \
+    SNIP_VERSION_NUM=$(echo ${SNIP_VERSION} | sed 's/^v//') && \
+    echo "Installing snip version: ${SNIP_VERSION}" && \
+    curl -fsSL --retry 3 "https://github.com/edouard-claude/snip/releases/download/${SNIP_VERSION}/snip_${SNIP_VERSION_NUM}_linux_${ARCH}.tar.gz" -o snip.tar.gz && \
+    tar xzf snip.tar.gz snip && \
+    mv snip /usr/local/bin/ && \
+    rm snip.tar.gz
+
 # Install GitHub CLI
 RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg && \
     chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg && \
@@ -418,6 +440,8 @@ RUN echo "=== Base System Tools ===" && \
     echo "yq: $(yq --version)" && \
     echo "gh: $(gh --version | head -1)" && \
     echo "ast-grep: $(sg --version)" && \
+    echo "gitleaks: $(gitleaks version)" && \
+    echo "snip: $(snip --version)" && \
     echo "pyright: $(pyright --version)" && \
     echo "ruff: $(ruff --version)" && \
     echo "shellcheck: $(shellcheck --version | head -2 | tail -1)" && \

@@ -521,7 +521,7 @@ if [ -d "$HOME/.config/opencode" ]; then
         fi
         
         # Config is valid, proceed with translation
-        TRANSLATION_LOG=$(mktemp /tmp/config-translation-XXXXXX.log)
+        TRANSLATION_LOG=$(mktemp -t config-translation-XXXXXX).log
         python3 "$SCRIPT_DIR/lib/detect-remote-mcps.py" \
             --config "$HOME/.config/opencode/opencode.jsonc" \
             --output "$HOME/.cache/mcp-proxy-config.json" \
@@ -631,10 +631,9 @@ echo ""
 DOCKER_ARGS=(
     $([ "$IS_ACP_MODE" = true ] && echo "-i" || echo "-it")
     --rm
-    -v "$HOME/.cache/opencode:/root/.cache/opencode"
+    -v "$HOME/.cache/opencode-docker:/root/.cache/opencode"
     -v "$HOME/.local/state/opencode/$PROJECT_NAME:/root/.local/state/opencode"
     -v "$HOME/.local/share/opencode:/root/.local/share/opencode"
-    -v "$HOME/.cache/opencode-docker/:/root/.cache"
     # Named volume for Playwright browsers — Docker auto-seeds from image on first use,
     # so browsers are available immediately without a separate install step.
     # Survives container restarts; delete with: docker volume rm opencode-ms-playwright
