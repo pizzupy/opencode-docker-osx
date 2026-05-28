@@ -69,6 +69,15 @@ RUN chmod +x /usr/local/bin/git-credential-helper && \
     git config --system credential.helper /usr/local/bin/git-credential-helper
 
 # ============================================================================
+# MCP servers
+# ============================================================================
+RUN git clone --depth=1 https://github.com/obra/private-journal-mcp.git /opt/private-journal-mcp && \
+    cd /opt/private-journal-mcp && \
+    npm install && \
+    npm run build && \
+    npm link
+
+# ============================================================================
 # Final verification
 # ============================================================================
 RUN echo "=== OpenCode Layer ===" && \
