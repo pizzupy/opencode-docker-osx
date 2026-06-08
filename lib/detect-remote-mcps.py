@@ -16,6 +16,18 @@ import os
 from pathlib import Path
 from typing import Dict, List, Tuple, Any
 
+
+def resolve_file_refs(value: str) -> str:
+    """Resolve {file:path} references — e.g. {file:~/.keys/github-ro} → token content."""
+    def replacer(m):
+        path = os.path.expanduser(m.group(1))
+        try:
+            with open(path) as f:
+                return f.read().strip()
+        except (OSError, IOError):
+            return m.group(0)
+    return re.sub(r'\{file:([^}]+)\}', replacer, value)
+
 def strip_jsonc_comments(content: str) -> str:
     """Remove comments and trailing commas from JSONC to make it valid JSON."""
     result = []
@@ -108,10 +120,14 @@ def parse_jsonc(file_path: str) -> Dict:
         print(f"Content around error: {clean_content[max(0, e.pos-50):e.pos+50]}", file=sys.stderr)
         raise
 
-def detect_remote_mcps(config: Dict) -> Dict[str, str]:
+def detect_remote_mcps(config: Dict, always_proxy: set | None = None) -> Dict[str, str]:
     """
     Detect remote MCP servers from config.
-    
+
+    always_proxy: set of server names to include even if enabled:false.
+    These are routed through mcp-proxy so their SSE endpoints exist at startup;
+    opencode's enabled flag still controls whether it actually connects.
+
     Returns a dict mapping server name to remote URL.
     """
     remote_mcps = {}
@@ -125,9 +141,12 @@ def detect_remote_mcps(config: Dict) -> Dict[str, str]:
         
         # Skip disabled servers — mcp-proxy 0.11.0 eagerly connects to all named
         # servers at startup, so including a disabled/unreachable server crashes
-        # the whole proxy. Users must enable a server in their config to use it.
+        # the whole proxy. Exception: servers in always_proxy are routed through
+        # mcp-proxy regardless, so opencode can connect after enabling in the UI
+        # (needed for streamable-HTTP servers that opencode can't speak natively).
         if server_config.get('enabled') is False:
-            continue
+            if not always_proxy or name not in always_proxy:
+                continue
 
         command = server_config.get('command', [])
         args = server_config.get('args', [])
@@ -261,10 +280,19 @@ def detect_host_local_mcps(config: Dict, sidecar_path: str | None = None) -> Dic
 
     return host_local
 
-def generate_mcp_proxy_config(remote_mcps: Dict[str, str], host_local_mcps: Dict[str, str] | None = None) -> Dict:
+def generate_mcp_proxy_config(
+    remote_mcps: Dict[str, str],
+    host_local_mcps: Dict[str, str] | None = None,
+    remote_mcp_headers: Dict[str, Dict] | None = None,
+) -> Dict:
     """
     Generate mcp-proxy config file format.
-    
+
+    remote_mcp_headers: per-server header dicts (e.g. {Authorization: "Bearer ..."}).
+    {file:...} refs are resolved so mcp-remote receives the actual token value and can
+    skip OAuth discovery (servers like GitHub Copilot MCP don't support dynamic client
+    registration but do accept Bearer tokens).
+
     mcp-proxy expects a JSON file with 'mcpServers' key containing server definitions.
     The command must be a single string (shell will parse it).
     """
@@ -276,8 +304,13 @@ def generate_mcp_proxy_config(remote_mcps: Dict[str, str], host_local_mcps: Dict
         host_url = url.replace("host.docker.internal", "localhost")
         # mcp-remote rejects non-HTTPS URLs unless --allow-http is passed
         allow_http = "" if host_url.startswith("https://") else " --allow-http"
+        header_args = ""
+        if remote_mcp_headers and name in remote_mcp_headers:
+            for key, val in remote_mcp_headers[name].items():
+                resolved = resolve_file_refs(str(val))
+                header_args += f' --header "{key}: {resolved}"'
         servers[name] = {
-            "command": f"npx -y mcp-remote {host_url}{allow_http}"
+            "command": f"npx -y mcp-remote {host_url}{allow_http}{header_args}"
         }
 
     for name, cmd in (host_local_mcps or {}).items():
@@ -452,12 +485,24 @@ def main():
     print(f"Reading config from: {args.config}")
     config = parse_jsonc(args.config)
     
+    # Read sidecar once — used by both always_proxy and host-local detection
+    sidecar_path = os.path.join(os.path.dirname(args.config), 'opencode-docker.json')
+    always_proxy: set = set()
+    if os.path.exists(sidecar_path):
+        try:
+            with open(sidecar_path) as f:
+                _sidecar = json.load(f)
+            always_proxy = set(_sidecar.get('remoteProxyAlways', []))
+            if always_proxy:
+                print(f"\nremoteProxyAlways servers (proxied even when disabled): {sorted(always_proxy)}")
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"  Warning: could not read sidecar for always_proxy: {e}", file=sys.stderr)
+
     # Detect remote MCPs
     print("\nDetecting remote MCP servers...")
-    remote_mcps = detect_remote_mcps(config)
+    remote_mcps = detect_remote_mcps(config, always_proxy)
 
     # Detect host-local MCPs (opencode-docker.json sidecar)
-    sidecar_path = os.path.join(os.path.dirname(args.config), 'opencode-docker.json')
     print(f"\nDetecting host-local MCP servers (sidecar: {sidecar_path})...")
     host_local_mcps = detect_host_local_mcps(config, sidecar_path)
 
@@ -485,10 +530,19 @@ def main():
         print(f"✓ Found {len(host_local_mcps)} host-local MCP server(s):")
         for name, cmd in host_local_mcps.items():
             print(f"  - {name}: {cmd}")
-    
+
+    # Extract per-server headers for remote MCPs (used to pass Bearer tokens to mcp-remote)
+    mcp_servers_cfg = config.get('mcp', config.get('mcpServers', {}))
+    remote_mcp_headers: Dict[str, Dict] = {}
+    for name in remote_mcps:
+        headers = mcp_servers_cfg.get(name, {}).get('headers', {})
+        if headers:
+            remote_mcp_headers[name] = headers
+            print(f"  Header keys for {name}: {list(headers.keys())}")
+
     # Generate mcp-proxy config
     print("\nGenerating mcp-proxy configuration...")
-    proxy_config = generate_mcp_proxy_config(remote_mcps, host_local_mcps)
+    proxy_config = generate_mcp_proxy_config(remote_mcps, host_local_mcps, remote_mcp_headers)
     
     if args.dry_run:
         print("\n=== DRY RUN: mcp-proxy config ===")
