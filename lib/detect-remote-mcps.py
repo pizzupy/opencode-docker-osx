@@ -204,7 +204,7 @@ def detect_remote_mcps(config: Dict, always_proxy: set | None = None) -> Dict[st
     
     return remote_mcps
 
-def detect_host_local_mcps(config: Dict, sidecar_path: str | None = None) -> Dict[str, str]:
+def detect_host_local_mcps(config: Dict, sidecar_path: str | None = None) -> Dict[str, Dict[str, Any]]:
     """
     Detect local MCP servers listed in the opencode-docker.json sidecar file.
 
@@ -217,7 +217,10 @@ def detect_host_local_mcps(config: Dict, sidecar_path: str | None = None) -> Dic
         ~/.config/opencode/opencode-docker.json
         { "hostMcpServers": ["playwright"] }
 
-    Returns a dict mapping server name to the assembled shell command string.
+    Returns a dict mapping server name to a structured dict with keys:
+        command: str  — the executable
+        args: list    — list of individual arguments
+        env: dict     — environment variables (may be empty)
     """
     host_local = {}
 
@@ -254,35 +257,35 @@ def detect_host_local_mcps(config: Dict, sidecar_path: str | None = None) -> Dic
         env = server_config.get('environment', server_config.get('env', {}))
 
         if isinstance(command, list):
-            parts = command
+            # command was specified as a list — first element is the executable
+            cmd_exe = command[0] if command else ''
+            extra_args = list(command[1:])
         else:
-            parts = [command] if command else []
+            cmd_exe = command or ''
+            extra_args = []
 
-        if isinstance(args, list):
-            parts += args
-        elif isinstance(args, str) and args:
-            parts.append(args)
-
-        if not parts:
+        if not cmd_exe:
             print(f"  Warning: hostMcpServer '{name}' has no command, skipping", file=sys.stderr)
             continue
 
-        cmd_str = ' '.join(parts)
-        if env:
-            # mcp-proxy invokes the command via exec (not shell), so env var prefixes
-            # like "FOO=bar cmd" won't work. Wrap in sh -c so the shell evaluates them.
-            env_prefix = ' '.join(f'{k}={v}' for k, v in env.items())
-            full_cmd = f"sh -c '{env_prefix} {cmd_str}'"
+        if isinstance(args, list):
+            args_list = extra_args + list(args)
+        elif isinstance(args, str) and args:
+            args_list = extra_args + [args]
         else:
-            full_cmd = cmd_str
+            args_list = extra_args
 
-        host_local[name] = full_cmd
+        host_local[name] = {
+            "command": cmd_exe,
+            "args": args_list,
+            "env": dict(env) if env else {},
+        }
 
     return host_local
 
 def generate_mcp_proxy_config(
     remote_mcps: Dict[str, str],
-    host_local_mcps: Dict[str, str] | None = None,
+    host_local_mcps: Dict[str, Dict[str, Any]] | None = None,
     remote_mcp_headers: Dict[str, Dict] | None = None,
 ) -> Dict:
     """
@@ -294,28 +297,35 @@ def generate_mcp_proxy_config(
     registration but do accept Bearer tokens).
 
     mcp-proxy expects a JSON file with 'mcpServers' key containing server definitions.
-    The command must be a single string (shell will parse it).
+    Each entry uses command + args + env (structured) rather than a flat shell string.
     """
     servers = {}
-    
+
     for name, url in remote_mcps.items():
         # mcp-proxy runs on the Mac host, not inside Docker — translate
         # host.docker.internal back to localhost for the proxy config
         host_url = url.replace("host.docker.internal", "localhost")
+        args = ["-y", "mcp-remote", host_url]
         # mcp-remote rejects non-HTTPS URLs unless --allow-http is passed
-        allow_http = "" if host_url.startswith("https://") else " --allow-http"
-        header_args = ""
+        if not host_url.startswith("https://"):
+            args.append("--allow-http")
         if remote_mcp_headers and name in remote_mcp_headers:
             for key, val in remote_mcp_headers[name].items():
                 resolved = resolve_file_refs(str(val))
-                header_args += f" --header '{key}: {resolved}'"
-        servers[name] = {
-            "command": f"npx -y mcp-remote {host_url}{allow_http}{header_args}"
-        }
+                args += ["--header", f"{key}: {resolved}"]
+        servers[name] = {"command": "npx", "args": args}
 
-    for name, cmd in (host_local_mcps or {}).items():
-        servers[name] = {"command": cmd}
-    
+    for name, server_info in (host_local_mcps or {}).items():
+        # Expand ~ in command and args — subprocess_exec doesn't invoke a shell,
+        # so tilde expansion must happen here.
+        entry: Dict[str, Any] = {
+            "command": os.path.expanduser(server_info["command"]),
+            "args": [os.path.expanduser(a) for a in server_info["args"]],
+        }
+        if server_info.get("env"):
+            entry["env"] = server_info["env"]
+        servers[name] = entry
+
     return {"mcpServers": servers}
 
 def translate_localhost_urls(config: Dict, use_docker: bool = True) -> Tuple[Dict, int]:
@@ -387,7 +397,7 @@ def update_opencode_config(
     remote_mcps: Dict[str, str],
     proxy_port: int = 8080,
     use_docker: bool = True,
-    host_local_mcps: Dict[str, str] | None = None,
+    host_local_mcps: Dict[str, Dict[str, Any]] | None = None,
 ) -> Dict:
     """
     Update the opencode config to use mcp-proxy endpoints instead of direct connections.
@@ -528,8 +538,8 @@ def main():
 
     if host_local_mcps:
         print(f"✓ Found {len(host_local_mcps)} host-local MCP server(s):")
-        for name, cmd in host_local_mcps.items():
-            print(f"  - {name}: {cmd}")
+        for name, info in host_local_mcps.items():
+            print(f"  - {name}: {info['command']} {' '.join(info['args'])}")
 
     # Extract per-server headers for remote MCPs (used to pass Bearer tokens to mcp-remote)
     mcp_servers_cfg = config.get('mcp', config.get('mcpServers', {}))

@@ -30,21 +30,21 @@ echo ""
 
 # Start mcp-proxy in server mode
 # This proxies to remote OAuth MCP servers and exposes them as SSE endpoints
-#
-# If a config file exists, use it (supports multiple services)
-# Otherwise, fall back to Linear-only mode (backward compatibility)
+# Uses --named-server-config to pass the JSON config file directly,
+# avoiding shell quoting issues with --named-server CLI args.
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-if [ -f "$PROXY_CONFIG" ]; then
-    echo "Using config file: $PROXY_CONFIG"
-    echo ""
-    
-    # Use the generator script to create the command with multiple --named-server arguments
-    # This is more reliable than --named-server-config which has issues with shell parsing
-    exec "$SCRIPT_DIR/generate-mcp-proxy-start.sh"
-else
+if [ ! -f "$PROXY_CONFIG" ]; then
     echo "No config file found at: $PROXY_CONFIG"
     echo "Run detect-remote-mcps.py to generate it."
     exit 1
 fi
+
+echo "Using config file: $PROXY_CONFIG"
+echo ""
+
+exec mcp-proxy \
+    --named-server-config "$PROXY_CONFIG" \
+    --port "$PROXY_PORT" \
+    --host "$PROXY_HOST" \
+    --pass-environment \
+    --allow-origin '*'
