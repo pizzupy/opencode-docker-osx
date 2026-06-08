@@ -308,7 +308,7 @@ def generate_mcp_proxy_config(
         if remote_mcp_headers and name in remote_mcp_headers:
             for key, val in remote_mcp_headers[name].items():
                 resolved = resolve_file_refs(str(val))
-                header_args += f' --header "{key}: {resolved}"'
+                header_args += f" --header '{key}: {resolved}'"
         servers[name] = {
             "command": f"npx -y mcp-remote {host_url}{allow_http}{header_args}"
         }
