@@ -158,6 +158,9 @@ RUN ARCH=$(dpkg --print-architecture) && \
     mv snip /usr/local/bin/ && \
     rm snip.tar.gz
 
+# Install sqz (universal context intelligence layer — CLI + MCP server)
+RUN curl -fsSL https://raw.githubusercontent.com/ojuschugh1/sqz/main/install.sh | sh
+
 # Install GitHub CLI
 RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg && \
     chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg && \
@@ -446,6 +449,7 @@ RUN echo "=== Base System Tools ===" && \
     echo "ast-grep: $(sg --version)" && \
     echo "gitleaks: $(gitleaks version)" && \
     echo "snip: $(snip --version)" && \
+    echo "sqz: $(sqz --version)" && \
     echo "pyright: $(pyright --version)" && \
     echo "ruff: $(ruff --version)" && \
     echo "shellcheck: $(shellcheck --version | head -2 | tail -1)" && \
