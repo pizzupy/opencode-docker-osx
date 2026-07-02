@@ -78,7 +78,7 @@ get_latest_version() {
         exit 1
     fi
     
-    echo "$version"
+    echo "${version#v}"
 }
 
 # Get currently installed version
@@ -93,7 +93,8 @@ get_current_version() {
 # Build Docker image
 build_image() {
     local version=$1
-    
+    version="${version#v}"
+
     log_info "Building Docker image with OpenCode version: $version"
     log_info "This may take several minutes..."
     
@@ -208,6 +209,11 @@ main() {
     if build_image "$latest_version"; then
         log_success "OpenCode development environment is ready!"
         log_info "Run with: docker run -it --rm -v \$(pwd):/workspace ${IMAGE_NAME}:latest"
+        BACKUP_SCRIPT="$HOME/.local/share/opencode/backup-before-upgrade.sh"
+        if [ -x "$BACKUP_SCRIPT" ]; then
+            log_info "Running pre-upgrade backup: $BACKUP_SCRIPT"
+            "$BACKUP_SCRIPT" && log_success "Backup completed" || log_warning "Backup script exited non-zero"
+        fi
     else
         exit 1
     fi

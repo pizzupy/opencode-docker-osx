@@ -42,6 +42,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 IMAGE="${IMAGE:-opencode-dev:latest}"
 PROXY_PORT="${PROXY_PORT:-8080}"
 
+# Allow pinning a specific image version as first arg: opencode-docker v0.3.101
+# This selects the opencode-dev:<version> tag built by update-opencode.sh
+if [[ "${1:-}" =~ ^v[0-9] ]]; then
+    IMAGE="opencode-dev:${1}"
+    shift
+fi
+
 # Optional features (set to "true" to enable)
 ENABLE_GIT_CREDENTIAL_PROXY="${ENABLE_GIT_CREDENTIAL_PROXY:-false}"
 
@@ -617,6 +624,10 @@ mkdir -p "$HOME/.config/opencode/memory" "$HOME/.config/opencode/journal"
 # Step 5: Build docker command
 echo "Starting OpenCode in Docker..."
 echo -e "  Image: ${GREEN}$IMAGE${NC}"
+OPENCODE_IMG_VERSION=$(docker image inspect "$IMAGE" --format '{{index .Config.Labels "opencode.version"}}' 2>/dev/null || true)
+if [ -n "$OPENCODE_IMG_VERSION" ]; then
+    echo -e "  OpenCode: ${GREEN}$OPENCODE_IMG_VERSION${NC}"
+fi
 echo -e "  OAuth proxy: ${GREEN}host.docker.internal:$PROXY_PORT${NC}"
 if [ "$CLIPBOARD_READY" = true ]; then
     echo -e "  Clipboard: ${GREEN}macOS → container (shared)${NC}"
